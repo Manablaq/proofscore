@@ -351,7 +351,7 @@ export default function Home() {
 
   useEffect(() => {
     fetchStats()
-    fetchLeaderboard()
+    setTimeout(() => fetchLeaderboard(), 1500)
   }, [fetchLeaderboard, fetchStats])
 
   useEffect(() => {
