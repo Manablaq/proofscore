@@ -40,6 +40,15 @@ const BRADBURY_RPC = 'https://rpc-bradbury.genlayer.com'
 
 // ── genlayer helpers ───────────────────────────────────────────────────────────
 async function readContract(method: string, args: unknown[] = []) {
+  try {
+    const url = `/api/contract?method=${method}&args=${encodeURIComponent(JSON.stringify(args))}`
+    const res = await fetch(url)
+    const data = await res.json()
+    if (data.ok) return data.result
+  } catch {}
+  return null
+}
+async function _readContractOld(method: string, args: unknown[] = []) {
   const { createClient } = await import('genlayer-js')
   const { testnetBradbury } = await import('genlayer-js/chains')
   const bradburyFetch: typeof fetch = async (input, init) => {
