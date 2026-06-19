@@ -4,7 +4,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { useAccount } from 'wagmi'
 
 // ─── Contract config ──────────────────────────────────────────────────────────
-const CONTRACT_ADDRESS = '0x1510C5CC0Ac6a2013A21fA4fC2039f3EC1AEF93B'
+const CONTRACT_ADDRESS = '0xC9aeac84FAbD0511BF4A409CAC3DB667f639A9bE'
 const BRADBURY_CHAIN_ID = '0x107D'
 const BRADBURY_RPC = 'https://rpc-bradbury.genlayer.com'
 

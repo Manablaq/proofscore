@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const CONTRACT = '0x1510C5CC0Ac6a2013A21fA4fC2039f3EC1AEF93B'
+const CONTRACT = '0xC9aeac84FAbD0511BF4A409CAC3DB667f639A9bE'
 const RPC = 'https://rpc-bradbury.genlayer.com'
 
 export async function GET(req: NextRequest) {
