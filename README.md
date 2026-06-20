@@ -1,36 +1,26 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ProofScore
 
-## Getting Started
+AI-Verified On-Chain Reputation for Builders on GenLayer Bradbury Testnet.
 
-First, run the development server:
+## Live App
+https://proofscoreapp.vercel.app
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Contract
+- Address: `0xB7e56dAA26e5f1b6127398d14A3Fa90338A0e4c2` (Bradbury Testnet)
+- File: `contracts/proof_score.py`
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## How It Works
+Users submit GitHub, Twitter/X, and portfolio URLs. The Intelligent Contract fetches real data from each platform and scores across 5 dimensions using `gl.eq_principle.prompt_non_comparative`:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **BUILD** (0-200): GitHub activity via GitHub REST API
+- **VOICE** (0-200): Twitter/X professional presence
+- **CRAFT** (0-200): Portfolio quality
+- **NETWORK** (0-200): On-chain history (Bradbury + Ethereum)
+- **CONSISTENCY** (0-200): Cross-platform identity alignment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Tier-based scoring (0/40/80/120/160/200) with format-only validator criteria ensures reliable consensus. Scores stored on-chain with a global leaderboard.
 
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Stack
+- GenLayer Bradbury Testnet (Python Intelligent Contract)
+- Next.js + genlayer-js
+- Vercel
