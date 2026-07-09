@@ -4,16 +4,16 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint .",
+    "deploy:v8": "node scripts/deploy-v8.mjs"
   },
   "dependencies": {
-    "@next/font": "^14.2.15",
     "@rainbow-me/rainbowkit": "^2.2.11",
     "@tanstack/react-query": "^5.101.0",
     "genlayer-js": "^1.2.0",
-    "next": "14.2.35",
+    "next": "^16.2.10",
     "next-themes": "^0.4.6",
     "react": "^18",
     "react-dom": "^18",
@@ -24,10 +24,16 @@
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
-    "eslint": "^8",
-    "eslint-config-next": "14.2.35",
-    "postcss": "^8",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.10",
+    "postcss": "^8.5.10",
     "tailwindcss": "^3.4.1",
-    "typescript": "^5"
+    "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "glob": "10.5.0",
+    "postcss": "$postcss",
+    "uuid": "11.1.1",
+    "ws": "8.21.0"
   }
 }

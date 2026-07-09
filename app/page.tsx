@@ -2,11 +2,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { useAccount } from 'wagmi'
+import { BRADBURY_CHAIN_ID, BRADBURY_EXPLORER, BRADBURY_RPC, PROOFSCORE_CONTRACT_ADDRESS } from '@/lib/config'
 
 // ─── Contract config ──────────────────────────────────────────────────────────
-const CONTRACT_ADDRESS = '0xB7e56dAA26e5f1b6127398d14A3Fa90338A0e4c2'
-const BRADBURY_CHAIN_ID = '0x107D'
-const BRADBURY_RPC = 'https://rpc-bradbury.genlayer.com'
+const BRADBURY_CHAIN_ID_HEX = `0x${BRADBURY_CHAIN_ID.toString(16)}`
 
 // ─── API reads (server-side genlayer-js) ─────────────────────────────────────
 async function readContract(method: string, args: unknown[] = []) {
@@ -38,12 +37,12 @@ async function getActiveProvider(address: string) {
 async function writeContract(address: string, method: string, args: unknown[] = []) {
   const provider = await getActiveProvider(address)
   const current = await provider.request({ method: 'eth_chainId' })
-  if (current.toLowerCase() !== BRADBURY_CHAIN_ID.toLowerCase()) {
+  if (current.toLowerCase() !== BRADBURY_CHAIN_ID_HEX.toLowerCase()) {
     try {
-      await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BRADBURY_CHAIN_ID }] })
+      await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: BRADBURY_CHAIN_ID_HEX }] })
     } catch (e: any) {
       if (e?.code === 4902 || e?.code === -32603) {
-        await provider.request({ method: 'wallet_addEthereumChain', params: [{ chainId: BRADBURY_CHAIN_ID, chainName: 'GenLayer Bradbury Testnet', nativeCurrency: { name: 'GEN', symbol: 'GEN', decimals: 18 }, rpcUrls: [BRADBURY_RPC], blockExplorerUrls: ['https://explorer-bradbury.genlayer.com'] }] })
+        await provider.request({ method: 'wallet_addEthereumChain', params: [{ chainId: BRADBURY_CHAIN_ID_HEX, chainName: 'GenLayer Bradbury Testnet', nativeCurrency: { name: 'GEN', symbol: 'GEN', decimals: 18 }, rpcUrls: [BRADBURY_RPC], blockExplorerUrls: [BRADBURY_EXPLORER] }] })
       } else throw e
     }
   }
@@ -70,7 +69,7 @@ async function writeContract(address: string, method: string, args: unknown[] = 
   }
   const chain = { ...testnetBradbury, rpcUrls: { default: { http: [BRADBURY_RPC] } } } as any
   const client = createClient({ chain, account: address, provider, fetch: bradburyFetch } as any)
-  const txHash = await (client as any).writeContract({ address: CONTRACT_ADDRESS, functionName: method, args })
+  const txHash = await (client as any).writeContract({ address: PROOFSCORE_CONTRACT_ADDRESS, functionName: method, args })
   const deadline = Date.now() + 15 * 60 * 1000
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 3000))
@@ -102,7 +101,7 @@ function scoreLabel(n: number) {
   if (n >= 600) return 'Expert'
   if (n >= 400) return 'Skilled'
   if (n >= 200) return 'Rising'
-  return 'Unverified'
+  return 'Unscored'
 }
 function short(a: string) { return `${a.slice(0, 6)}…${a.slice(-4)}` }
 
@@ -113,6 +112,7 @@ interface Score {
   craft_score: string; network_score: string; consistency_score: string
   reasoning: string; github_url: string; twitter_url: string; portfolio_url: string
   last_updated: string; update_count: string
+  version?: string; evidence_summary?: string
 }
 interface LeaderEntry {
   address: string; username: string; total_score: string
@@ -198,10 +198,9 @@ function HexGrid() {
 
 // ─── Count-up hook ────────────────────────────────────────────────────────────
 function useCountUp(target: number, duration = 1200, skip = false) {
-  const [val, setVal] = useState(skip ? target : 0)
+  const [val, setVal] = useState(target)
   useEffect(() => {
-    if (skip) { setVal(target); return }
-    setVal(0)
+    if (skip) return
     const start = Date.now()
     const id = setInterval(() => {
       const t = Math.min((Date.now() - start) / duration, 1)
@@ -210,16 +209,17 @@ function useCountUp(target: number, duration = 1200, skip = false) {
     }, 16)
     return () => clearInterval(id)
   }, [target, duration, skip])
-  return val
+  return skip ? target : val
 }
 
 // ─── Typewriter hook ──────────────────────────────────────────────────────────
 function useTypewriter(text: string, speed = 50) {
   const [out, setOut] = useState('')
   useEffect(() => {
-    setOut(''); let i = 0
+    let i = 0
+    const reset = window.setTimeout(() => setOut(''), 0)
     const id = setInterval(() => { setOut(text.slice(0, ++i)); if (i >= text.length) clearInterval(id) }, speed)
-    return () => clearInterval(id)
+    return () => { window.clearTimeout(reset); clearInterval(id) }
   }, [text, speed])
   return out
 }
@@ -317,10 +317,10 @@ function ScoreCard({ score }: { score: Score }) {
           </div>
         </div>
       </div>
-      {/* AI Verdict */}
+      {/* Contract reasoning */}
       {score.reasoning && (
         <div style={{ marginTop: 18, paddingTop: 18, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-          <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', fontFamily: "'Space Mono', monospace", letterSpacing: '0.14em', marginBottom: 10 }}>AI VERDICT</div>
+          <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', fontFamily: "'Space Mono', monospace", letterSpacing: '0.14em', marginBottom: 10 }}>CONTRACT OUTPUT</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             {score.reasoning.split(' | ').map((line, i) => (
               <div key={i} style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', lineHeight: 1.6, paddingLeft: 10, borderLeft: `2px solid ${color}35` }}>{line}</div>
@@ -328,8 +328,16 @@ function ScoreCard({ score }: { score: Score }) {
           </div>
         </div>
       )}
+      {score.evidence_summary && (
+        <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+          <div style={{ fontSize: 8, color: 'rgba(255,255,255,0.2)', fontFamily: "'Space Mono', monospace", letterSpacing: '0.14em', marginBottom: 8 }}>EVIDENCE SUMMARY</div>
+          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.34)', lineHeight: 1.6, fontFamily: "'Space Mono', monospace", wordBreak: 'break-word' }}>
+            {score.evidence_summary}
+          </div>
+        </div>
+      )}
       <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.04)', display: 'flex', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)', fontFamily: "'Space Mono', monospace" }}>GENLAYER BRADBURY · VERIFIED</span>
+        <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)', fontFamily: "'Space Mono', monospace" }}>GENLAYER BRADBURY · {score.version ? score.version.toUpperCase() + ' · ' : ''}ON-CHAIN</span>
         <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)', fontFamily: "'Space Mono', monospace" }}>×{score.update_count}</span>
       </div>
     </div>
@@ -353,6 +361,7 @@ export default function Home() {
   const [verifyAddr, setVerifyAddr] = useState('')
   const [verifyScore, setVerifyScore] = useState<Score | null>(null)
   const [verifyLoading, setVerifyLoading] = useState(false)
+  const [nowSec, setNowSec] = useState(0)
 
   const tagline = useTypewriter('VALIDATOR CONSENSUS ACTIVE.', 60)
 
@@ -369,8 +378,24 @@ export default function Home() {
     try { setStats(await readContract('get_stats', [])) } catch {}
   }, [])
 
-  useEffect(() => { fetchStats(); fetchLeaderboard() }, [fetchStats, fetchLeaderboard])
-  useEffect(() => { if (address) fetchMyScore() }, [address, fetchMyScore])
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      fetchStats()
+      fetchLeaderboard()
+    }, 0)
+    return () => window.clearTimeout(id)
+  }, [fetchStats, fetchLeaderboard])
+  useEffect(() => {
+    if (!address) return
+    const id = window.setTimeout(() => { fetchMyScore() }, 0)
+    return () => window.clearTimeout(id)
+  }, [address, fetchMyScore])
+  useEffect(() => {
+    const updateNow = () => setNowSec(Date.now() / 1000)
+    updateNow()
+    const id = window.setInterval(updateNow, 60 * 1000)
+    return () => window.clearInterval(id)
+  }, [])
 
   async function handleGenerate() {
     if (!address) return
@@ -378,7 +403,7 @@ export default function Home() {
     const hasAny = (githubUrl && githubUrl !== 'none') || (twitterUrl && twitterUrl !== 'none') || (portfolioUrl && portfolioUrl !== 'none')
     if (!hasAny) { setErrorMsg('Provide at least one URL.'); return }
     setTxLoading(true); setErrorMsg(null)
-    setStatusMsg('Submitted — 5 AI validators are scanning your profiles...')
+    setStatusMsg('Submitted - the GenLayer contract is generating tiered scores...')
     try {
       const result = await writeContract(address, 'generate_score', [username.trim(), githubUrl.trim() || 'none', twitterUrl.trim() || 'none', portfolioUrl.trim() || 'none'])
       if (result.success) {
@@ -399,7 +424,8 @@ export default function Home() {
   }
 
   const hasScore = myScore?.exists === 'true'
-  const canUpdate = hasScore ? (Date.now() / 1000 - parseInt(myScore!.last_updated)) >= 604800 : true
+  const secondsSinceUpdate = hasScore ? nowSec - parseInt(myScore!.last_updated) : 0
+  const canUpdate = hasScore ? secondsSinceUpdate >= 604800 : true
 
   const AMBER = '#F59E0B'
   const CYAN = '#06B6D4'
@@ -475,7 +501,7 @@ export default function Home() {
             <div style={{ width: 30, height: 30, borderRadius: 8, background: `linear-gradient(135deg, ${AMBER}, #D97706)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, boxShadow: `0 0 18px ${AMBER}35`, flexShrink: 0 }}>◈</div>
             <div>
               <div style={{ fontWeight: 800, fontSize: 15, letterSpacing: '-0.03em', lineHeight: 1.1 }}>ProofScore</div>
-              <div style={{ fontSize: 8, color: MUTED, fontFamily: "'Space Mono', monospace", letterSpacing: '0.09em' }}>AI-VERIFIED REPUTATION</div>
+              <div style={{ fontSize: 8, color: MUTED, fontFamily: "'Space Mono', monospace", letterSpacing: '0.09em' }}>ON-CHAIN REPUTATION</div>
             </div>
           </div>
           {/* Desktop tabs */}
@@ -518,6 +544,9 @@ export default function Home() {
           <span style={{ fontSize: 12, color: MUTED, fontFamily: "'Space Mono', monospace" }}>{tagline}</span>
           <span style={{ animation: 'blink 1s step-end infinite', color: CYAN, fontFamily: "'Space Mono', monospace", fontSize: 14 }}>▌</span>
         </div>
+        <p style={{ color: MUTED, fontSize: 13, lineHeight: 1.7, maxWidth: 640, margin: '0 0 26px', fontFamily: "'Space Mono', monospace" }}>
+          Scores are generated by the ProofScore GenLayer contract and stored on-chain. The v8 source adds evidence-backed tier checks for redeployment; validator checks still do not prove identity or objective truth.
+        </p>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button onClick={() => setTab('score')} style={{ ...primaryBtn, fontSize: 14, padding: '13px 30px' }}>Get Scored →</button>
           <button onClick={() => setTab('leaderboard')} style={{ padding: '13px 30px', background: 'transparent', border: `1px solid ${BORDER}`, borderRadius: 10, color: TEXT, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: "'Space Grotesk', sans-serif", transition: 'all 0.15s' }}>
@@ -545,7 +574,7 @@ export default function Home() {
                 {hasScore && !canUpdate && (
                   <div style={{ ...card, textAlign: 'center', padding: 14 }}>
                     <span style={{ fontSize: 11, color: MUTED, fontFamily: "'Space Mono', monospace" }}>
-                      Next refresh in ~{Math.ceil((604800 - (Date.now()/1000 - parseInt(myScore!.last_updated))) / 86400)} days
+                      Next refresh in ~{Math.ceil((604800 - secondsSinceUpdate) / 86400)} days
                     </span>
                   </div>
                 )}
@@ -560,7 +589,7 @@ export default function Home() {
                       <div><label style={lbl}>Twitter / X URL</label><input style={inp} placeholder="https://x.com/yourusername" value={twitterUrl} onChange={e => setTwitterUrl(e.target.value)} /></div>
                       <div><label style={lbl}>Portfolio / Work URL</label><input style={inp} placeholder="Website, GitHub Pages, Medium, Behance..." value={portfolioUrl} onChange={e => setPortfolioUrl(e.target.value)} /></div>
                       <div style={{ fontSize: 10, color: MUTED, lineHeight: 1.7, padding: '11px 14px', background: `${AMBER}08`, borderRadius: 8, border: `1px solid ${AMBER}14`, fontFamily: "'Space Mono', monospace" }}>
-                        At least one URL required. 5 AI validators browse and score your work across 5 dimensions. Takes 2–5 min.
+                        At least one URL required. The GenLayer contract requests tiered outputs for 5 dimensions, then stores accepted results on-chain. The v8 source adds evidence summaries and tier-support checks for redeployment.
                       </div>
                       {errorMsg && <div style={{ background: 'rgba(239,68,68,0.09)', border: '1px solid rgba(239,68,68,0.22)', borderRadius: 10, padding: '11px 15px', fontSize: 11, color: '#ef4444', fontFamily: "'Space Mono', monospace" }}>{errorMsg}</div>}
                       {statusMsg && <div style={{ background: `${CYAN}09`, border: `1px solid ${CYAN}22`, borderRadius: 10, padding: '11px 15px', fontSize: 11, color: CYAN, fontFamily: "'Space Mono', monospace" }}>⬡ {statusMsg}</div>}
@@ -634,8 +663,8 @@ export default function Home() {
           <div className="fadeUp" style={{ maxWidth: 720 }}>
             <div style={{ marginBottom: 26 }}>
               <div style={{ fontSize: 8, letterSpacing: '0.16em', color: MUTED, fontFamily: "'Space Mono', monospace", marginBottom: 6 }}>// VERIFY_ADDRESS</div>
-              <h2 style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.03em', margin: '0 0 8px' }}>Verify Any Wallet</h2>
-              <p style={{ color: MUTED, fontSize: 11, lineHeight: 1.7, margin: 0, fontFamily: "'Space Mono', monospace" }}>Look up any address. Share yours to prove your reputation anywhere.</p>
+              <h2 style={{ fontSize: 26, fontWeight: 800, letterSpacing: '-0.03em', margin: '0 0 8px' }}>Look Up Any Wallet</h2>
+              <p style={{ color: MUTED, fontSize: 11, lineHeight: 1.7, margin: 0, fontFamily: "'Space Mono', monospace" }}>Read accepted on-chain ProofScore data for any address. This shows stored contract output, not proof of identity or truth.</p>
             </div>
             <div style={{ ...card, marginBottom: 14 }}>
               <div style={{ display: 'flex', gap: 10 }}>
@@ -669,9 +698,10 @@ export default function Home() {
       {/* Footer */}
       <footer style={{ position: 'relative', zIndex: 1, borderTop: '1px solid rgba(255,255,255,0.05)', padding: '18px 20px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-          <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)', fontFamily: "'Space Mono', monospace" }}>PROOFSCORE · AI-VERIFIED ON GENLAYER BRADBURY</span>
+          <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)', fontFamily: "'Space Mono', monospace" }}>PROOFSCORE · CONTRACT-SCORED ON GENLAYER BRADBURY</span>
           <div style={{ display: 'flex', gap: 18 }}>
             <a href="https://github.com/Manablaq/proofscore" target="_blank" rel="noreferrer" style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)', textDecoration: 'none', fontFamily: "'Space Mono', monospace" }}>GITHUB</a>
+            <a href={`${BRADBURY_EXPLORER}/address/${PROOFSCORE_CONTRACT_ADDRESS}`} target="_blank" rel="noreferrer" style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)', textDecoration: 'none', fontFamily: "'Space Mono', monospace" }}>CONTRACT</a>
             <a href="https://x.com/mr_Albert_blaq" target="_blank" rel="noreferrer" style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)', textDecoration: 'none', fontFamily: "'Space Mono', monospace" }}>TWITTER</a>
             <span style={{ fontSize: 8, color: 'rgba(255,255,255,0.15)', fontFamily: "'Space Mono', monospace" }}>MANABLAQ</span>
           </div>

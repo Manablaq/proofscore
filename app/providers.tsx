@@ -4,18 +4,19 @@ import { WagmiProvider } from 'wagmi'
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import '@rainbow-me/rainbowkit/styles.css'
+import { BRADBURY_CHAIN_ID, BRADBURY_EXPLORER, BRADBURY_RPC } from '@/lib/config'
 
 const bradbury = {
-  id: 4221,
+  id: BRADBURY_CHAIN_ID,
   name: 'GenLayer Bradbury Testnet',
   nativeCurrency: { decimals: 18, name: 'GEN', symbol: 'GEN' },
-  rpcUrls: { default: { http: ['https://rpc-bradbury.genlayer.com'] } },
-  blockExplorers: { default: { name: 'Bradbury Explorer', url: 'https://explorer-bradbury.genlayer.com' } },
+  rpcUrls: { default: { http: [BRADBURY_RPC] } },
+  blockExplorers: { default: { name: 'Bradbury Explorer', url: BRADBURY_EXPLORER } },
   testnet: true,
 } as const
 
 const config = getDefaultConfig({
-  appName: 'ProofScore — AI-Verified Reputation',
+  appName: 'ProofScore',
   projectId: 'a3c696a1d58dc441a304d5d5ce935634',
   chains: [bradbury],
   ssr: true,

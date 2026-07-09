@@ -6,8 +6,8 @@ import { Providers } from './providers'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'ProofScore — AI-Verified Reputation',
-  description: '5 AI validators browse your GitHub, Twitter and portfolio to generate a permanent on-chain reputation score. Powered by GenLayer.',
+  title: 'ProofScore - On-Chain Reputation',
+  description: 'A GenLayer Bradbury app that generates tiered builder reputation scores in a Python intelligent contract and stores accepted results on-chain.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

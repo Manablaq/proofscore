@@ -1,17 +1,26 @@
 # v0.1.0
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
-from dataclasses import dataclass
 import json
-import typing
 
-# ProofScore v7 - uses official gl.eq_principle.prompt_non_comparative API
-# Tiers: 0, 40, 80, 120, 160, 200 (only 6 values per dimension)
-# prompt_non_comparative: validators verify leader's output quality, don't re-run
+# ProofScore v8 - evidence-backed tier validation.
+# Stronger than v7:
+# - stores compact evidence for each dimension alongside score fields
+# - applies deterministic caps for sparse or unavailable evidence
+# - asks validators to check JSON shape, allowed tiers, non-empty reasoning,
+#   and whether the cited evidence supports the selected tier under the rubric
+# Still not proved:
+# - wallet ownership of off-chain profiles
+# - objective truth of external pages
+# - complete identity verification
+#
+# Redeploy required: this file changes contract runtime behavior and storage
+# payload contents while preserving public method names and frontend score keys.
+
+VALID_TIERS = [0, 40, 80, 120, 160, 200]
 
 
 def _tier(n: int) -> int:
-    """Snap score to nearest valid tier."""
     n = max(0, min(200, int(n)))
     if n < 20:
         return 0
@@ -26,8 +35,11 @@ def _tier(n: int) -> int:
     return 200
 
 
+def _cap_tier(n: int, cap: int) -> int:
+    return min(_tier(n), _tier(cap))
+
+
 def _safe_json(text: str) -> dict:
-    """Parse JSON from LLM output, stripping markdown if present."""
     try:
         s = text.strip()
         if s.startswith("```"):
@@ -37,6 +49,60 @@ def _safe_json(text: str) -> dict:
         return json.loads(s.strip())
     except:
         return {}
+
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except:
+        return default
+
+
+def _clean(text: str, limit: int = 420) -> str:
+    try:
+        s = str(text).replace("\n", " ").replace("\r", " ").replace('"', "'")
+        while "  " in s:
+            s = s.replace("  ", " ")
+        return s[:limit]
+    except:
+        return ""
+
+
+def _url_handle(url: str) -> str:
+    try:
+        u = url.rstrip("/")
+        return u.split("/")[-1].lstrip("@").split("?")[0]
+    except:
+        return ""
+
+
+def _github_handle(url: str) -> str:
+    try:
+        part = url.rstrip("/").split("github.com/")[-1]
+        return part.split("/")[0].split("?")[0]
+    except:
+        return _url_handle(url)
+
+
+def _json_score(raw: str, fallback_score: int, fallback_reason: str) -> dict:
+    d = _safe_json(raw)
+    score = _tier(_safe_int(d.get("score", fallback_score), fallback_score))
+    reasoning = _clean(d.get("reasoning", fallback_reason), 360)
+    evidence = _clean(d.get("evidence", ""), 360)
+    if not reasoning:
+        reasoning = fallback_reason
+    return {"score": score, "reasoning": reasoning, "evidence": evidence}
+
+
+def _semantic_criteria(allowed: str, extra: str) -> str:
+    return (
+        "Accept only if the answer is a valid JSON object with fields: "
+        "score, reasoning, evidence. score must be exactly one of: " + allowed + ". "
+        "reasoning and evidence must be non-empty strings. The evidence must be derived "
+        "from the supplied input, not invented. The reasoning must explain why the chosen "
+        "tier follows the rubric and must not materially exceed what the supplied evidence "
+        "supports. " + extra
+    )
 
 
 class ProofScore(gl.Contract):
@@ -59,7 +125,6 @@ class ProofScore(gl.Contract):
         address = str(gl.message.sender_address)
         now_str = gl.message_raw["datetime"]
 
-        # Rate limit: prevent same-day refresh
         existing_raw = self.scores.get(address, None)
         if existing_raw is not None:
             try:
@@ -79,146 +144,123 @@ class ProofScore(gl.Contract):
         has_po = bool(portfolio_url and portfolio_url != "none")
         assert has_gh or has_tw or has_po, "Provide at least one URL."
 
-        # ── BUILD (GitHub) ────────────────────────────────────────────────────
-        b, b_r = 0, "No GitHub provided."
+        # BUILD: GitHub metrics are parsed deterministically where possible,
+        # then validator-reviewed for tier support from compact evidence.
+        b, b_r, b_e = 0, "No GitHub provided.", "No GitHub URL submitted."
+        gh_handle = ""
         if has_gh:
+            gh_handle = _github_handle(github_url)
+
             def _get_github_input() -> str:
-                handle = github_url.rstrip("/").split("github.com/")[-1].split("/")[0]
                 user_data = ""
                 repos_data = ""
                 try:
-                    r = gl.nondet.web.get("https://api.github.com/users/" + handle)
-                    user_data = r.body.decode("utf-8")[:1500]
+                    r = gl.nondet.web.get("https://api.github.com/users/" + gh_handle)
+                    user_data = r.body.decode("utf-8")[:1400]
                 except:
                     pass
                 try:
-                    r2 = gl.nondet.web.get("https://api.github.com/users/" + handle + "/repos?sort=updated&per_page=10")
-                    repos_data = r2.body.decode("utf-8")[:2000]
+                    r2 = gl.nondet.web.get("https://api.github.com/users/" + gh_handle + "/repos?sort=updated&per_page=8")
+                    repos_data = r2.body.decode("utf-8")[:2200]
                 except:
                     pass
-                if user_data:
-                    return "GitHub handle: " + handle + "\nUser profile (JSON):\n" + user_data + "\nRecent repos (JSON):\n" + repos_data
-                else:
-                    return "GitHub URL: " + github_url + "\nNote: Could not load via GitHub API."
+                return (
+                    "GitHub URL: " + github_url + "\n"
+                    "Handle: " + gh_handle + "\n"
+                    "User JSON: " + (user_data if user_data else "UNAVAILABLE") + "\n"
+                    "Recent repos JSON: " + (repos_data if repos_data else "UNAVAILABLE")
+                )
 
             gh_raw = gl.eq_principle.prompt_non_comparative(
                 _get_github_input,
                 task=(
-                    "Score this GitHub profile for ProofScore, an on-chain reputation system. "
-                    "Choose a tier for BUILD score based on real project evidence:\n"
-                    "TIER 0 (score=0): No meaningful repos or commits\n"
-                    "TIER 1 (score=40): 1-3 repos, mostly forks/tutorials, or profile not accessible\n"
-                    "TIER 2 (score=80): 4-10 repos, some real projects, regular commits\n"
-                    "TIER 3 (score=120): 10-20 repos, clear builder, consistent activity\n"
-                    "TIER 4 (score=160): 20+ repos or notable projects, strong technical depth\n"
-                    "TIER 5 (score=200): Exceptional - major open source, industry impact\n"
-                    "Reply ONLY with valid JSON."
+                    "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
+                    "Score BUILD from GitHub evidence. Tiers: 0 no accessible or meaningful evidence; "
+                    "40 accessible but sparse/tutorial/fork-heavy; 80 several real repos or activity; "
+                    "120 clear builder with consistent recent repos; 160 strong depth, many repos, stars, "
+                    "or notable projects; 200 exceptional public impact. Evidence must cite compact facts "
+                    "such as public_repos, followers, repo names, stars, forks, account age, or access limits."
                 ),
-                criteria=(
-                    "Validate format only - do NOT evaluate whether the score is appropriate. "
-                    "Accept if: (1) valid JSON object, (2) score is exactly one of: 0, 40, 80, 120, 160, 200, "
-                    "(3) reasoning is a non-empty string. No semantic evaluation."
+                criteria=_semantic_criteria(
+                    "0, 40, 80, 120, 160, 200",
+                    "If GitHub API data is unavailable, score must be 0 or 40. Scores 160 or 200 require strong cited evidence.",
                 ),
             )
-            try:
-                d = _safe_json(gh_raw)
-                b = _tier(int(d.get("score", 40)))
-                b_r = str(d.get("reasoning", "GitHub scored."))
-            except:
-                b, b_r = 40, "GitHub score parsed."
+            gh = _json_score(gh_raw, 40, "GitHub scored conservatively.")
+            b = gh["score"]
+            b_r = gh["reasoning"]
+            b_e = gh["evidence"] if gh["evidence"] else "GitHub handle " + gh_handle
 
-        # ── VOICE (Twitter/X) ─────────────────────────────────────────────────
-        v, v_r = 0, "No Twitter/X provided."
+        # VOICE: X/Twitter often blocks scraping; inaccessible pages are capped.
+        v, v_r, v_e = 0, "No Twitter/X provided.", "No Twitter/X URL submitted."
+        tw_handle = ""
         if has_tw:
-            handle = twitter_url.rstrip("/").split("/")[-1].lstrip("@")
+            tw_handle = _url_handle(twitter_url)
 
             def _get_twitter_input() -> str:
+                content = ""
                 try:
                     r = gl.nondet.web.get(twitter_url)
-                    content = r.body.decode("utf-8")[:2000]
+                    content = r.body.decode("utf-8")[:1800]
                 except:
-                    content = ""
-                if len(content) > 200:
-                    return "Twitter/X URL: " + twitter_url + "\n\nContent:\n" + content
-                else:
-                    return (
-                        "Twitter/X URL: " + twitter_url + " (handle: @" + handle + ")\n"
-                        "Note: Profile could not be scraped (access blocked).\n"
-                        "Evaluate based on URL/handle alone."
-                    )
+                    pass
+                if len(content) > 180:
+                    return "Twitter/X URL: " + twitter_url + "\nHandle: @" + tw_handle + "\nContent: " + content
+                return "Twitter/X URL: " + twitter_url + "\nHandle: @" + tw_handle + "\nContent: UNAVAILABLE_OR_BLOCKED"
 
             tw_raw = gl.eq_principle.prompt_non_comparative(
                 _get_twitter_input,
                 task=(
-                    "Score this Twitter/X profile for ProofScore. "
-                    "Choose a tier for VOICE score:\n"
-                    "TIER 0 (score=0): Spam, fake, or clearly inactive account\n"
-                    "TIER 1 (score=40): Real handle, profile blocked or not accessible - assign this if unsure\n"
-                    "TIER 2 (score=80): Regular tweets, some professional relevance\n"
-                    "TIER 3 (score=120): Clear domain expertise, consistent professional content\n"
-                    "TIER 4 (score=160): Strong thought leadership, significant following\n"
-                    "TIER 5 (score=200): Top-tier voice, major industry influence\n"
-                    "If profile is blocked/inaccessible, assign TIER 1 (score=40). "
-                    "Reply ONLY with valid JSON."
+                    "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
+                    "Score VOICE from visible professional content. Tiers: 0 spam-like, empty, or unrelated; "
+                    "40 handle only, blocked, sparse, or uncertain; 80 some professional relevance; "
+                    "120 consistent domain expertise; 160 strong public professional presence; "
+                    "200 major public influence. Do not claim account ownership."
                 ),
-                criteria=(
-                    "Validate format only - do NOT evaluate whether the score is appropriate. "
-                    "Accept if: (1) valid JSON object, (2) score is exactly one of: 0, 40, 80, 120, 160, 200, "
-                    "(3) reasoning is a non-empty string. No semantic evaluation."
+                criteria=_semantic_criteria(
+                    "0, 40, 80, 120, 160, 200",
+                    "If content is unavailable or blocked, score must be 0 or 40. Do not accept identity ownership claims.",
                 ),
             )
-            try:
-                d = _safe_json(tw_raw)
-                v = _tier(int(d.get("score", 40)))
-                v_r = str(d.get("reasoning", "Twitter scored."))
-            except:
-                v, v_r = 40, "Twitter score parsed."
+            tw = _json_score(tw_raw, 40, "Twitter/X scored conservatively due to limited access.")
+            v = tw["score"]
+            v_r = tw["reasoning"]
+            v_e = tw["evidence"] if tw["evidence"] else "Twitter/X handle @" + tw_handle
 
-        # ── CRAFT (Portfolio) ─────────────────────────────────────────────────
-        c, c_r = 0, "No portfolio provided."
+        # CRAFT: portfolio fetch is compact and capped if unavailable.
+        c, c_r, c_e = 0, "No portfolio provided.", "No portfolio URL submitted."
         if has_po:
             def _get_portfolio_input() -> str:
+                content = ""
                 try:
                     r = gl.nondet.web.get(portfolio_url)
-                    content = r.body.decode("utf-8")[:3000]
+                    content = r.body.decode("utf-8")[:2400]
                 except:
-                    content = ""
+                    pass
                 if len(content) > 100:
-                    return "Portfolio URL: " + portfolio_url + "\n\nContent:\n" + content
-                else:
-                    return (
-                        "Portfolio URL: " + portfolio_url + "\n"
-                        "Note: Content could not be loaded. Evaluate based on URL alone."
-                    )
+                    return "Portfolio URL: " + portfolio_url + "\nContent: " + content
+                return "Portfolio URL: " + portfolio_url + "\nContent: UNAVAILABLE_OR_TOO_SMALL"
 
             po_raw = gl.eq_principle.prompt_non_comparative(
                 _get_portfolio_input,
                 task=(
-                    "Score this portfolio for ProofScore. Accepts any professional work: "
-                    "websites, Behance, Medium, GitHub Pages, npm packages, apps.\n"
-                    "Choose a tier for CRAFT score:\n"
-                    "TIER 0 (score=0): Broken, empty, or not real work\n"
-                    "TIER 1 (score=40): Minimal/inaccessible - assign if URL couldn't load\n"
-                    "TIER 2 (score=80): Real work, decent quality\n"
-                    "TIER 3 (score=120): Good portfolio, clear skills, evidence of impact\n"
-                    "TIER 4 (score=160): Professional-grade, strong presentation\n"
-                    "TIER 5 (score=200): Exceptional, industry-recognized\n"
-                    "Reply ONLY with valid JSON."
+                    "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
+                    "Score CRAFT from portfolio/work evidence. Tiers: 0 broken/empty/no work evidence; "
+                    "40 minimal or inaccessible; 80 real work with basic quality; 120 good portfolio with "
+                    "clear skills and examples; 160 professional-grade presentation and impact; "
+                    "200 exceptional or widely recognized work. Evidence must cite visible signals."
                 ),
-                criteria=(
-                    "Validate format only - do NOT evaluate whether the score is appropriate. "
-                    "Accept if: (1) valid JSON object, (2) score is exactly one of: 0, 40, 80, 120, 160, 200, "
-                    "(3) reasoning is a non-empty string. No semantic evaluation."
+                criteria=_semantic_criteria(
+                    "0, 40, 80, 120, 160, 200",
+                    "If content is unavailable or too small, score must be 0 or 40. High tiers require concrete visible work evidence.",
                 ),
             )
-            try:
-                d = _safe_json(po_raw)
-                c = _tier(int(d.get("score", 40)))
-                c_r = str(d.get("reasoning", "Portfolio scored."))
-            except:
-                c, c_r = 40, "Portfolio score parsed."
+            po = _json_score(po_raw, 40, "Portfolio scored conservatively.")
+            c = po["score"]
+            c_r = po["reasoning"]
+            c_e = po["evidence"] if po["evidence"] else "Portfolio URL submitted."
 
-        # ── NETWORK (On-chain) ────────────────────────────────────────────────
+        # NETWORK: valid wallet gets a conservative base; high tiers require page evidence.
         def _get_network_input() -> str:
             bradbury_content = ""
             eth_content = ""
@@ -234,89 +276,73 @@ class ProofScore(gl.Contract):
                 pass
             return (
                 "Wallet address: " + address + "\n"
-                "GenLayer Bradbury explorer:\n" + (bradbury_content if bradbury_content else "No data") + "\n"
-                "Ethereum Etherscan:\n" + (eth_content if eth_content else "No data")
+                "Bradbury explorer content: " + (bradbury_content if bradbury_content else "UNAVAILABLE") + "\n"
+                "Ethereum address page content: " + (eth_content if eth_content else "UNAVAILABLE")
             )
 
         net_raw = gl.eq_principle.prompt_non_comparative(
             _get_network_input,
             task=(
-                "Score this wallet's on-chain history for ProofScore.\n"
-                "Choose a tier for NETWORK score:\n"
-                "TIER 1 (score=40): Valid wallet, no on-chain history (default for new wallets)\n"
-                "TIER 2 (score=80): Some activity (1-20 transactions)\n"
-                "TIER 3 (score=120): Moderate (20-100 transactions, some protocols)\n"
-                "TIER 4 (score=160): Active (100+ transactions, multiple protocols)\n"
-                "TIER 5 (score=200): Power user (DeFi, NFT, extensive activity)\n"
-                "Minimum score is 40 (valid wallet exists). Reply ONLY with valid JSON."
+                "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
+                "Score NETWORK. Tiers: 40 valid wallet with unavailable/no visible history; "
+                "80 some visible activity; 120 moderate visible activity or multiple interactions; "
+                "160 active history across protocols or many transactions; 200 extensive power-user history. "
+                "Evidence must cite visible page signals or access limits."
             ),
-            criteria=(
-                "Validate format only - do NOT evaluate whether the score is appropriate. "
-                "Accept if: (1) valid JSON object, (2) score is exactly one of: 40, 80, 120, 160, 200, "
-                "(3) reasoning is a non-empty string. No semantic evaluation."
+            criteria=_semantic_criteria(
+                "40, 80, 120, 160, 200",
+                "If both address pages are unavailable or show no clear activity, score must be 40.",
             ),
         )
-        try:
-            d = _safe_json(net_raw)
-            n = _tier(max(40, int(d.get("score", 40))))
-            n_r = str(d.get("reasoning", "Network scored."))
-        except:
-            n, n_r = 40, "Network score parsed."
+        net = _json_score(net_raw, 40, "Network scored conservatively.")
+        n = max(40, net["score"])
+        n_r = net["reasoning"]
+        n_e = net["evidence"] if net["evidence"] else "Wallet address " + address
 
-        # ── CONSISTENCY ───────────────────────────────────────────────────────
+        # CONSISTENCY: based on submitted handles/evidence, with deterministic caps.
         platform_count = sum([has_gh, has_tw, has_po])
 
         def _get_consistency_input() -> str:
-            parts = []
+            parts = ["Display name: " + username, "Wallet address: " + address]
             if has_gh:
-                parts.append("GitHub: " + github_url + " (build score=" + str(b) + "/200)")
+                parts.append("GitHub: " + github_url + " handle=" + gh_handle + " score=" + str(b) + " evidence=" + b_e)
             if has_tw:
-                parts.append("Twitter: " + twitter_url + " (voice score=" + str(v) + "/200)")
+                parts.append("Twitter/X: " + twitter_url + " handle=" + tw_handle + " score=" + str(v) + " evidence=" + v_e)
             if has_po:
-                parts.append("Portfolio: " + portfolio_url + " (craft score=" + str(c) + "/200)")
-            return (
-                "Platforms submitted (" + str(platform_count) + " total):\n" +
-                "\n".join(parts)
-            )
+                parts.append("Portfolio: " + portfolio_url + " score=" + str(c) + " evidence=" + c_e)
+            return "\n".join(parts)
 
         con_raw = gl.eq_principle.prompt_non_comparative(
             _get_consistency_input,
             task=(
-                "Evaluate cross-platform CONSISTENCY for ProofScore. "
-                "Do these platforms appear to belong to the same professional?\n"
-                "Choose a tier:\n"
-                "TIER 0 (score=0): Platforms clearly contradict or are unrelated\n"
-                "TIER 1 (score=40): Same person likely, minimal professional alignment\n"
-                "TIER 2 (score=80): Clear same person, skills somewhat aligned\n"
-                "TIER 3 (score=120): Good alignment, professional identity cohesive\n"
-                "TIER 4 (score=160): Strong alignment, platforms reinforce each other\n"
-                "TIER 5 (score=200): Perfect coherence across all platforms\n"
-                "Note: With only 1 platform max score is TIER 2 (80). "
-                "With 2 platforms max score is TIER 3 (120). "
-                "Reply ONLY with valid JSON."
+                "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
+                "Score CONSISTENCY from visible overlap across submitted URLs, handles, display name, "
+                "and evidence summaries. Tiers: 0 clear contradiction/unrelated; 40 weak or sparse alignment; "
+                "80 plausible alignment; 120 good alignment across two or more sources; 160 strong reinforcing "
+                "professional identity; 200 exceptional coherence across all sources. Do not claim ownership proof."
             ),
-            criteria=(
-                "Validate format only - do NOT evaluate whether the score is appropriate. "
-                "Accept if: (1) valid JSON object, (2) score is exactly one of: 0, 40, 80, 120, 160, 200, "
-                "(3) reasoning is a non-empty string. No semantic evaluation."
+            criteria=_semantic_criteria(
+                "0, 40, 80, 120, 160, 200",
+                "With one submitted platform, score must be at most 80. With two submitted platforms, score must be at most 120. Do not accept ownership-proof claims.",
             ),
         )
-        try:
-            d = _safe_json(con_raw)
-            x = _tier(int(d.get("score", 80)))
-            # Apply platform caps
-            if platform_count <= 1:
-                x = min(x, 80)
-            elif platform_count == 2:
-                x = min(x, 120)
-            x_r = str(d.get("reasoning", "Consistency scored."))
-        except:
-            x, x_r = 80, "Consistency score parsed."
-            if platform_count <= 1:
-                x = 40
+        con = _json_score(con_raw, 80, "Consistency scored from submitted evidence.")
+        x = con["score"]
+        if platform_count <= 1:
+            x = min(x, 80)
+        elif platform_count == 2:
+            x = min(x, 120)
+        x_r = con["reasoning"]
+        x_e = con["evidence"] if con["evidence"] else "Submitted platform count: " + str(platform_count)
 
-        # ── Store results ─────────────────────────────────────────────────────
         total = b + v + c + n + x
+        evidence = {
+            "build": b_e,
+            "voice": v_e,
+            "craft": c_e,
+            "network": n_e,
+            "consistency": x_e,
+        }
 
         reasoning = (
             "BUILD(" + str(b) + "): " + b_r + " | " +
@@ -324,7 +350,7 @@ class ProofScore(gl.Contract):
             "CRAFT(" + str(c) + "): " + c_r + " | " +
             "NETWORK(" + str(n) + "): " + n_r + " | " +
             "CONSISTENCY(" + str(x) + "): " + x_r
-        ).replace('"', "'")
+        )
 
         uc = "1"
         if existing_raw is not None:
@@ -334,22 +360,25 @@ class ProofScore(gl.Contract):
             except:
                 uc = "2"
 
-        data = (
-            '{"build_score":"' + str(b) + '",'
-            '"consistency_score":"' + str(x) + '",'
-            '"craft_score":"' + str(c) + '",'
-            '"github_url":"' + (github_url if has_gh else "none") + '",'
-            '"last_updated":"' + now_str + '",'
-            '"network_score":"' + str(n) + '",'
-            '"portfolio_url":"' + (portfolio_url if has_po else "none") + '",'
-            '"reasoning":"' + reasoning + '",'
-            '"total_score":"' + str(total) + '",'
-            '"twitter_url":"' + (twitter_url if has_tw else "none") + '",'
-            '"update_count":"' + uc + '",'
-            '"voice_score":"' + str(v) + '"}'
-        )
+        data = {
+            "version": "v8",
+            "build_score": str(b),
+            "consistency_score": str(x),
+            "craft_score": str(c),
+            "github_url": github_url if has_gh else "none",
+            "last_updated": now_str,
+            "network_score": str(n),
+            "portfolio_url": portfolio_url if has_po else "none",
+            "reasoning": _clean(reasoning, 1600),
+            "evidence_summary": _clean(json.dumps(evidence), 1600),
+            "evidence": evidence,
+            "total_score": str(total),
+            "twitter_url": twitter_url if has_tw else "none",
+            "update_count": uc,
+            "voice_score": str(v),
+        }
 
-        self.scores[address] = data
+        self.scores[address] = json.dumps(data)
         self.usernames[address] = username
 
         if uc == "1":
@@ -358,16 +387,17 @@ class ProofScore(gl.Contract):
             except:
                 self.total_profiles = "1"
 
-        entry = (
-            '{"address":"' + address + '",'
-            '"build_score":"' + str(b) + '",'
-            '"consistency_score":"' + str(x) + '",'
-            '"craft_score":"' + str(c) + '",'
-            '"network_score":"' + str(n) + '",'
-            '"total_score":"' + str(total) + '",'
-            '"username":"' + username.replace('"', "'") + '",'
-            '"voice_score":"' + str(v) + '"}'
-        )
+        entry = {
+            "address": address,
+            "build_score": str(b),
+            "consistency_score": str(x),
+            "craft_score": str(c),
+            "network_score": str(n),
+            "total_score": str(total),
+            "username": username.replace('"', "'"),
+            "voice_score": str(v),
+        }
+
         idx = -1
         for i in range(len(self.leaderboard)):
             try:
@@ -379,18 +409,20 @@ class ProofScore(gl.Contract):
                 pass
         if idx >= 0:
             self.leaderboard.pop(idx)
+
         inserted = False
+        entry_raw = json.dumps(entry)
         for i in range(len(self.leaderboard)):
             try:
                 e = json.loads(self.leaderboard[i])
                 if int(e.get("total_score", "0")) < total:
-                    self.leaderboard.insert(i, entry)
+                    self.leaderboard.insert(i, entry_raw)
                     inserted = True
                     break
             except:
                 pass
         if not inserted:
-            self.leaderboard.append(entry)
+            self.leaderboard.append(entry_raw)
         while len(self.leaderboard) > 50:
             self.leaderboard.pop(len(self.leaderboard) - 1)
 
@@ -400,9 +432,11 @@ class ProofScore(gl.Contract):
         if raw is None:
             return json.dumps({
                 "exists": "false", "address": address,
+                "version": "v8",
                 "total_score": "0", "build_score": "0", "voice_score": "0",
                 "craft_score": "0", "network_score": "0", "consistency_score": "0",
-                "reasoning": "", "github_url": "none", "twitter_url": "none",
+                "reasoning": "", "evidence_summary": "", "evidence": {},
+                "github_url": "none", "twitter_url": "none",
                 "portfolio_url": "none", "username": "Unknown",
                 "last_updated": "0", "update_count": "0",
             })
@@ -427,6 +461,7 @@ class ProofScore(gl.Contract):
         return json.dumps({
             "total_profiles": self.total_profiles or "0",
             "leaderboard_size": str(len(self.leaderboard)),
+            "contract_version": "v8",
         })
 
     @gl.public.view
