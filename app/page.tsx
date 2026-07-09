@@ -353,6 +353,7 @@ export default function Home() {
   const [stats, setStats] = useState<{ total_profiles: string; leaderboard_size: string } | null>(null)
   const [txLoading, setTxLoading] = useState(false)
   const [statusMsg, setStatusMsg] = useState<string | null>(null)
+  const [statusTxHash, setStatusTxHash] = useState<string | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [username, setUsername] = useState('')
   const [githubUrl, setGithubUrl] = useState('')
@@ -402,17 +403,17 @@ export default function Home() {
     if (!username.trim()) { setErrorMsg('Enter a display name.'); return }
     const hasAny = (githubUrl && githubUrl !== 'none') || (twitterUrl && twitterUrl !== 'none') || (portfolioUrl && portfolioUrl !== 'none')
     if (!hasAny) { setErrorMsg('Provide at least one URL.'); return }
-    setTxLoading(true); setErrorMsg(null)
+    setTxLoading(true); setErrorMsg(null); setStatusTxHash(null)
     setStatusMsg('Submitted - the GenLayer contract is generating tiered scores...')
     try {
       const result = await writeContract(address, 'generate_score', [username.trim(), githubUrl.trim() || 'none', twitterUrl.trim() || 'none', portfolioUrl.trim() || 'none'])
       if (result.success) {
-        setStatusMsg('Score written to chain. Loading...')
+        setStatusTxHash(result.txHash)
+        setStatusMsg('Accepted — finalization pending. Your score is already readable from accepted state. GenExplorer may show accepted (undetermined) until the Bradbury finalization window closes.')
         await new Promise(r => setTimeout(r, 3000))
         await fetchMyScore(); await fetchLeaderboard(); await fetchStats()
-        setStatusMsg(null)
-      } else { setErrorMsg(result.error ?? 'Transaction failed.'); setStatusMsg(null) }
-    } catch (e: any) { setErrorMsg(e?.message ?? String(e)); setStatusMsg(null) }
+      } else { setErrorMsg(result.error ?? 'Transaction failed.'); setStatusMsg(null); setStatusTxHash(null) }
+    } catch (e: any) { setErrorMsg(e?.message ?? String(e)); setStatusMsg(null); setStatusTxHash(null) }
     setTxLoading(false)
   }
 
@@ -592,7 +593,18 @@ export default function Home() {
                         At least one URL required. The GenLayer contract requests tiered outputs for 5 dimensions, then stores accepted results on-chain. The v8 source adds evidence summaries and tier-support checks for redeployment.
                       </div>
                       {errorMsg && <div style={{ background: 'rgba(239,68,68,0.09)', border: '1px solid rgba(239,68,68,0.22)', borderRadius: 10, padding: '11px 15px', fontSize: 11, color: '#ef4444', fontFamily: "'Space Mono', monospace" }}>{errorMsg}</div>}
-                      {statusMsg && <div style={{ background: `${CYAN}09`, border: `1px solid ${CYAN}22`, borderRadius: 10, padding: '11px 15px', fontSize: 11, color: CYAN, fontFamily: "'Space Mono', monospace" }}>⬡ {statusMsg}</div>}
+                      {statusMsg && (
+                        <div style={{ background: `${CYAN}09`, border: `1px solid ${CYAN}22`, borderRadius: 10, padding: '11px 15px', fontSize: 11, color: CYAN, fontFamily: "'Space Mono', monospace", lineHeight: 1.6 }}>
+                          ⬡ {statusMsg}
+                          {statusTxHash && (
+                            <div style={{ marginTop: 8 }}>
+                              <a href={`${BRADBURY_EXPLORER}/tx/${statusTxHash}`} target="_blank" rel="noreferrer" style={{ color: CYAN, textDecoration: 'underline', textUnderlineOffset: 3 }}>
+                                View transaction in GenExplorer
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <button style={primaryBtn} onClick={handleGenerate} disabled={txLoading}>
                         {txLoading ? '⟳ Validators Running...' : hasScore ? '↺ Refresh Score' : '◈ Generate ProofScore'}
                       </button>

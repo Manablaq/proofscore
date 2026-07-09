@@ -94,6 +94,16 @@ The Next.js app uses RainbowKit/Wagmi for wallet connection and `genlayer-js` fo
 - No fabricated fallback data is returned; API errors are surfaced as failed responses.
 - Shared network and contract constants live in `lib/config.ts`.
 
+## Bradbury Transaction Status
+
+Bradbury transaction status has two separate stages that matter for ProofScore:
+
+- `accepted` = live consensus accepted execution.
+- `accepted (undetermined)` = finalization window is still open.
+- A score may already be readable from accepted state before finalization.
+- `finalized` = finalization/challenge window closed.
+- ProofScore reads accepted state but does not claim finality early.
+
 ## Local Development
 
 Install dependencies:
@@ -125,7 +135,7 @@ npm run dev
 1. Open the live app and confirm wallet connection targets GenLayer Bradbury.
 2. Use leaderboard and stats views to confirm read-only API calls return contract data.
 3. Connect a wallet on Bradbury, submit a display name plus at least one profile URL, and sign the `generate_score` transaction in the connected wallet.
-4. Wait for the transaction to reach an accepted or finalized state, then confirm the score appears in `My Score`.
+4. Wait for the transaction to reach accepted state, then confirm the score appears in `My Score`.
 5. Use the lookup view with the same wallet address and confirm it returns stored contract output.
 6. Confirm `lib/config.ts` points to the v8 contract, redeploy the frontend, then repeat the write and read checks.
 7. Run `npm run lint`, `npm run build`, `python3 -m py_compile contracts/proof_score.py`, and `git diff --check` locally before submission.
@@ -178,6 +188,17 @@ A live v8 scoring transaction was submitted and accepted on Bradbury.
 - Stored profile count after test: `1`
 
 The live API returned `exists: "true"`, `version: "v8"`, score fields, `evidence_summary`, and the structured `evidence` object for the scored wallet.
+
+Second wallet successful test proof:
+
+- Score transaction ID: `0x56185d0045466f43589dae2754e38d896049da53c8a6a767a01830e2ee6bac6e`
+- GenLayer chain transaction hash: `0x6f633a86b197db05b688127e4055b9360414075180283b62e2fe6d551b9bfd20`
+- Scored wallet: `0x5bB49021001200fE8156a81c7fcF097e535e7181`
+- Contract: `0x12aE05355F2C89476a46c2Ec5BCA75B0F073A09B`
+- Stored version: `v8`
+- Stored total score: `200`
+- Stored profile count after test: `2`
+- Stored leaderboard size after test: `2`
 
 ## Dependency Audit Note
 
