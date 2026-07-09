@@ -164,6 +164,21 @@ V8 deployment:
 - Receipt result: `1`
 - Contract source: `contracts/proof_score.py`
 
+## Successful V8 Test Proof
+
+A live v8 scoring transaction was submitted and accepted on Bradbury.
+
+- Score transaction ID: `0x524800645a3a8bdcfc4840a9c0b4c30e8a8ae545a06bf690548add2ec219dba1`
+- GenLayer chain transaction hash: `0x491412f4c43417e13d4f9e3d5f775383264c5278a86a39cc4f6164521764b63a`
+- Scored wallet: `0x1f87Ae197af539253978d435aD45cCf28Fb95024`
+- Contract: `0x12aE05355F2C89476a46c2Ec5BCA75B0F073A09B`
+- Stored version: `v8`
+- Stored total score: `160`
+- Stored leaderboard size after test: `1`
+- Stored profile count after test: `1`
+
+The live API returned `exists: "true"`, `version: "v8"`, score fields, `evidence_summary`, and the structured `evidence` object for the scored wallet.
+
 ## Dependency Audit Note
 
 The dependency pass first used safe transitive fixes, then migrated the app to Next 16, ESLint 9, and TypeScript 5.9 with an explicit webpack build path. `npm audit` currently reports zero vulnerabilities.
