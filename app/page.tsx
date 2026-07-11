@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { useAccount } from 'wagmi'
 import { formatEther, parseEther } from 'viem'
@@ -35,9 +35,31 @@ type ContractStats = {
 
 type TxState = { phase: 'idle' | 'submitted' | 'accepted' | 'finalized' | 'failed'; hash?: string; detail?: string }
 
+type AcceptedSnapshot = { campaigns: Campaign[]; stats: ContractStats | null }
+
 const chainHex = `0x${BRADBURY_CHAIN_ID.toString(16)}`
 const MIN_DEADLINE_AHEAD_MS = 10 * 60_000
 const DEFAULT_DEADLINE_AHEAD_MS = 24 * 60 * 60_000
+const ACCEPTED_SYNC_DELAYS_MS = [0, 2_000, 5_000, 10_000, 20_000, 30_000] as const
+const BACKGROUND_REFRESH_MS = 25_000
+
+function wait(delayMs: number) {
+  return new Promise(resolve => window.setTimeout(resolve, delayMs))
+}
+
+function currentTimeMs() {
+  return Date.now()
+}
+
+async function syncAcceptedState(check: () => Promise<boolean>) {
+  for (const delayMs of ACCEPTED_SYNC_DELAYS_MS) {
+    if (delayMs > 0) await wait(delayMs)
+    try {
+      if (await check()) return true
+    } catch {}
+  }
+  return false
+}
 
 function formatLocalDateTime(date: Date, roundUp = false) {
   if (!Number.isFinite(date.getTime())) return ''
@@ -176,6 +198,7 @@ export default function Home() {
   const [error, setError] = useState('')
   const [deadlineError, setDeadlineError] = useState('')
   const [tx, setTx] = useState<TxState>({ phase: 'idle' })
+  const acceptedRefreshInFlight = useRef(false)
   const selected = campaigns.find(campaign => campaign.campaign_id === selectedId)
   const isV9Live = PROOFSCORE_IS_CONFIGURED && String(stats?.contract_version).toLowerCase() === 'v9'
 
@@ -184,8 +207,8 @@ export default function Home() {
     return () => window.clearInterval(interval)
   }, [])
 
-  const refreshCampaigns = useCallback(async () => {
-    if (!PROOFSCORE_IS_CONFIGURED) { setLoading(false); return }
+  const refreshCampaigns = useCallback(async (): Promise<AcceptedSnapshot | null> => {
+    if (!PROOFSCORE_IS_CONFIGURED) { setLoading(false); return null }
     try {
       const [campaignResult, statsResult] = await Promise.allSettled([readContract('list_campaigns'), readContract('get_stats')])
       if (campaignResult.status === 'rejected') throw campaignResult.reason
@@ -194,29 +217,76 @@ export default function Home() {
       setStats(statsResult.status === 'fulfilled' ? parseContractStats(statsResult.value) : null)
       setSelectedId(current => current || list[0]?.campaign_id || '')
       setError('')
+      return { campaigns: list, stats: statsResult.status === 'fulfilled' ? parseContractStats(statsResult.value) : null }
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load campaigns.') }
     finally { setLoading(false) }
+    return null
   }, [])
 
-  const refreshSelected = useCallback(async () => {
-    if (!selectedId || !PROOFSCORE_IS_CONFIGURED) return
+  const refreshSelected = useCallback(async (campaignId = selectedId): Promise<Submission[] | null> => {
+    if (!campaignId || !PROOFSCORE_IS_CONFIGURED) return null
     try {
-      const list = asArray<Submission>(await readContract('list_submissions', [selectedId]))
-      setSubmissions(list)
-      const entries = await Promise.all(list.map(async submission => [submission.submission_id, asArray<Challenge>(await readContract('list_challenges', [selectedId, submission.submission_id]))] as const))
-      setChallenges(Object.fromEntries(entries))
+      const list = asArray<Submission>(await readContract('list_submissions', [campaignId]))
+      const entries = await Promise.all(list.map(async submission => [submission.submission_id, asArray<Challenge>(await readContract('list_challenges', [campaignId, submission.submission_id]))] as const))
+      if (campaignId === selectedId) {
+        setSubmissions(list)
+        setChallenges(Object.fromEntries(entries))
+      }
+      return list
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load submissions.') }
+    return null
   }, [selectedId])
+
+  const refreshAcceptedState = useCallback(async () => {
+    if (acceptedRefreshInFlight.current) return
+    acceptedRefreshInFlight.current = true
+    try {
+      await refreshCampaigns()
+      await refreshSelected()
+    } finally {
+      acceptedRefreshInFlight.current = false
+    }
+  }, [refreshCampaigns, refreshSelected])
 
   useEffect(() => { const timer = window.setTimeout(() => { void refreshCampaigns() }, 0); return () => window.clearTimeout(timer) }, [refreshCampaigns])
   useEffect(() => { const timer = window.setTimeout(() => { void refreshSelected() }, 0); return () => window.clearTimeout(timer) }, [refreshSelected])
+  useEffect(() => {
+    const interval = window.setInterval(() => { void refreshAcceptedState() }, BACKGROUND_REFRESH_MS)
+    return () => window.clearInterval(interval)
+  }, [refreshAcceptedState])
 
-  async function runWrite(method: string, args: unknown[], value?: bigint) {
+  async function runWrite(method: string, args: unknown[], value?: bigint, expected?: () => Promise<boolean>, finalRefreshCampaignId?: string) {
     if (!address) { setError('Connect a wallet first.'); return false }
     setError(''); setTx({ phase: 'idle' })
     try {
       const accepted = await submitWrite(address, method, args, value, setTx)
-      if (accepted) { await refreshCampaigns(); await refreshSelected() }
+      if (accepted) {
+        setTx(current => ({ ...current, detail: 'Accepted successfully — syncing latest contract state…' }))
+        const checkExpectedState = async () => {
+          if (acceptedRefreshInFlight.current) return false
+          acceptedRefreshInFlight.current = true
+          try {
+            if (expected) {
+              if (!await expected()) return false
+              if (finalRefreshCampaignId) {
+                const aggregate = await refreshCampaigns()
+                const selectedSnapshot = await refreshSelected(finalRefreshCampaignId)
+                return aggregate !== null && aggregate.stats !== null && selectedSnapshot !== null
+              }
+              return true
+            }
+            await refreshCampaigns()
+            await refreshSelected()
+            return true
+          } finally {
+            acceptedRefreshInFlight.current = false
+          }
+        }
+        const synchronized = await syncAcceptedState(checkExpectedState)
+        setTx(current => ({ ...current, detail: synchronized
+          ? current.phase === 'finalized' ? 'Finalized. Latest accepted state is synchronized.' : 'Accepted with successful execution — finalization pending. Latest accepted state is synchronized.'
+          : 'Transaction succeeded, but the latest accepted state is still syncing. It will appear automatically or after refresh.' }))
+      }
       return accepted
     } catch (reason) {
       setTx({ phase: 'failed', detail: reason instanceof Error ? reason.message : 'Transaction failed.' }); return false
@@ -236,7 +306,7 @@ export default function Home() {
     const deadlineMs = deadlineInput ? new Date(deadlineInput).getTime() : Number.NaN
 
     setDeadlineError('')
-    if (!deadlineInput || !Number.isFinite(deadlineMs) || deadlineMs < Date.now() + MIN_DEADLINE_AHEAD_MS) {
+    if (!deadlineInput || !Number.isFinite(deadlineMs) || deadlineMs < currentTimeMs() + MIN_DEADLINE_AHEAD_MS) {
       const message = 'Choose a deadline at least 10 minutes in the future.'
       setDeadlineError(message); setError(message); return
     }
@@ -258,22 +328,51 @@ export default function Home() {
     }
 
     const deadline = Math.floor(deadlineMs / 1000)
-    const ok = await runWrite('create_campaign', [title, description, threshold, reward.toString(), deadline, requirements], totalValue)
+    const existingCampaignIds = new Set(campaigns.map(campaign => campaign.campaign_id))
+    const creator = address?.toLowerCase()
+    const ok = await runWrite('create_campaign', [title, description, threshold, reward.toString(), deadline, requirements], totalValue, async () => {
+      const snapshot = await refreshCampaigns()
+      if (!snapshot) return false
+      return snapshot.campaigns.some(campaign => !existingCampaignIds.has(campaign.campaign_id) && campaign.title === title && campaign.creator.toLowerCase() === creator)
+    })
     if (ok) { event.currentTarget.reset(); setDeadlineError('') }
   }
 
   async function submitProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (!selected) return
     const form = new FormData(event.currentTarget)
-    const ok = await runWrite('submit_builder_profile', [selected.campaign_id, ...['handle', 'github', 'x', 'portfolio', 'additional', 'notes'].map(key => String(form.get(key) || 'none'))])
+    const campaignId = selected.campaign_id
+    const builder = address?.toLowerCase()
+    const existingSubmissionIds = new Set(submissions.filter(item => item.builder.toLowerCase() === builder).map(item => item.submission_id))
+    const ok = await runWrite('submit_builder_profile', [campaignId, ...['handle', 'github', 'x', 'portfolio', 'additional', 'notes'].map(key => String(form.get(key) || 'none'))], undefined, async () => {
+      const list = await refreshSelected(campaignId)
+      return list?.some(item => item.builder.toLowerCase() === builder && !existingSubmissionIds.has(item.submission_id)) ?? false
+    }, campaignId)
     if (ok) event.currentTarget.reset()
   }
 
   async function challenge(event: FormEvent<HTMLFormElement>, submissionId: string) {
     event.preventDefault(); if (!selected) return
     const form = new FormData(event.currentTarget)
-    const ok = await runWrite('challenge_score', [selected.campaign_id, submissionId, String(form.get('challenge_url')), String(form.get('reason'))])
+    const campaignId = selected.campaign_id
+    const previous = submissions.find(item => item.submission_id === submissionId)
+    const previousCount = previous?.challenge_count ?? (challenges[submissionId]?.length ?? 0)
+    const previousChallengeIds = new Set((challenges[submissionId] ?? []).map(item => item.challenge_id))
+    const ok = await runWrite('challenge_score', [campaignId, submissionId, String(form.get('challenge_url')), String(form.get('reason'))], undefined, async () => {
+      const list = await refreshSelected(campaignId)
+      const current = list?.find(item => item.submission_id === submissionId)
+      const challengeList = asArray<Challenge>(await readContract('list_challenges', [campaignId, submissionId]))
+      return (current?.challenge_count ?? 0) > previousCount || challengeList.some(item => !previousChallengeIds.has(item.challenge_id))
+    }, campaignId)
     if (ok) event.currentTarget.reset()
+  }
+
+  async function claimReward(campaignId: string, submissionId: string) {
+    await runWrite('claim_reward', [campaignId, submissionId], undefined, async () => {
+      const list = await refreshSelected(campaignId)
+      const current = list?.find(item => item.submission_id === submissionId)
+      return current?.claimed === true || current?.payout_status === 'SCHEDULED_FOR_FINALIZATION'
+    }, campaignId)
   }
 
   return <main>
@@ -304,7 +403,7 @@ export default function Home() {
     </section>
 
     <section className="section" id="campaigns">
-      <header className="section-head"><div><span className="eyebrow">OPEN SETTLEMENTS</span><h2>Builder campaigns</h2></div><button className="mini-button" onClick={() => { refreshCampaigns(); refreshSelected() }}>Refresh accepted state</button></header>
+      <header className="section-head"><div><span className="eyebrow">OPEN SETTLEMENTS</span><h2>Builder campaigns</h2></div><button className="mini-button" onClick={() => { void refreshAcceptedState() }}>Refresh accepted state</button></header>
       {loading ? <div className="empty">Reading accepted contract state…</div> : campaigns.length === 0 ? <div className="empty">No live v9 campaigns. This interface does not fabricate campaign data.</div> : <div className="campaign-grid">
         {campaigns.map(campaign => <article className={`campaign-card ${selectedId === campaign.campaign_id ? 'selected' : ''}`} key={campaign.campaign_id} role="button" tabIndex={0} aria-pressed={selectedId === campaign.campaign_id} onClick={() => setSelectedId(campaign.campaign_id)} onKeyDown={event => { if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return; event.preventDefault(); setSelectedId(campaign.campaign_id) }}>
           <div className="card-top"><span className={`status ${campaign.status.toLowerCase()}`}>{campaign.status}</span><span>#{campaign.campaign_id}</span></div>
@@ -334,7 +433,7 @@ export default function Home() {
         {submissions.length === 0 ? <div className="empty">No accepted submissions yet.</div> : submissions.map(submission => <article className="submission" key={submission.submission_id}>
           <div className="submission-main"><ScoreRing score={submission.score} /><div className="submission-copy"><div className="badges"><span className={`decision ${submission.decision.toLowerCase()}`}>{submission.decision.replace('_', ' ')}</span>{submission.eligible_to_claim && <span className="decision eligible">ELIGIBLE TO CLAIM</span>}{submission.claimed && <span className="decision claimed">CLAIMED · FINALIZATION DEPENDENT</span>}{submission.challenge_count > 0 && <span className="decision challenged">CHALLENGED</span>}{submission.revision_count > 0 && <span className="decision revised">REVISED</span>}</div><h3>{submission.handle}</h3><span className="wallet">Builder {short(submission.builder)} · Confidence {submission.confidence}</span><p>{submission.evidence_summary}</p><details><summary>Canonical score record</summary><p>{submission.reasoning}</p><div className="source-columns"><div><b>Accepted sources</b>{submission.accepted_sources.map(source => <span key={source}>{source}</span>)}</div><div><b>Risk flags</b>{submission.risk_flags.length ? submission.risk_flags.map(flag => <span key={flag}>{flag}</span>) : <span>None recorded</span>}</div></div></details></div></div>
           <div className="dimensions">{Object.entries(submission.dimensions).map(([name, value]) => { const max = name === 'github' ? 25 : name === 'x' ? 15 : 20; return <div key={name}><span>{name}</span><i><b style={{ width: `${value / max * 100}%` }} /></i><strong>{value}/{max}</strong></div> })}</div>
-          {submission.eligible_to_claim && !submission.claimed && address?.toLowerCase() === submission.builder.toLowerCase() && <div className="claim-panel"><div><strong>Reward eligible</strong><span>Claiming schedules {gen(selected.reward_per_qualified_builder)} for finalization. It is not paid until finality is known.</span></div><button className="button claim" onClick={() => runWrite('claim_reward', [selected.campaign_id, submission.submission_id])}>Schedule reward claim</button></div>}
+          {submission.eligible_to_claim && !submission.claimed && address?.toLowerCase() === submission.builder.toLowerCase() && <div className="claim-panel"><div><strong>Reward eligible</strong><span>Claiming schedules {gen(selected.reward_per_qualified_builder)} for finalization. It is not paid until finality is known.</span></div><button className="button claim" onClick={() => { void claimReward(selected.campaign_id, submission.submission_id) }}>Schedule reward claim</button></div>}
           <div className="challenge-zone"><form onSubmit={event => challenge(event, submission.submission_id)}><strong>Challenge this score</strong><small>{submission.claimed ? 'Post-claim challenges are recorded for transparency and do not claw back scheduled payouts.' : address?.toLowerCase() === selected.creator.toLowerCase() ? 'Creator challenge: valid tags can recompute score and eligibility before claim.' : 'This challenge will be recorded as counter-evidence. Only the campaign creator can change score/eligibility before claim.'}</small><input required type="url" name="challenge_url" placeholder="https://… counter-evidence URL" /><div className="tag-list" aria-label="Valid challenge tags">{['github', 'x', 'portfolio', 'additional', 'duplicate', 'irrelevant'].map(tag => <code key={tag}>[invalid:{tag}]</code>)}</div><textarea required minLength={10} name="reason" placeholder="Explain the issue and include applicable validation tags…" /><button className="mini-button" disabled={!isConnected || !PROOFSCORE_IS_CONFIGURED}>Submit contestable challenge</button></form>
             {(challenges[submission.submission_id] ?? []).length > 0 && <div className="timeline"><strong>Challenge timeline</strong>{challenges[submission.submission_id].map(item => <div className="timeline-item" key={item.challenge_id}><i /><div><span>#{item.challenge_id} · {item.verdict} · score {item.revised_score}</span><p>{item.reasoning}</p><small>{item.settlement_effect.replaceAll('_', ' ')} · {new Date(item.created_at * 1000).toLocaleString()}</small></div></div>)}</div>}
           </div>
