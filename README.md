@@ -20,7 +20,16 @@ Campaign requirements use only these exact lowercase tokens: `[requires:github]`
 
 Score-affecting creator challenges use only these exact lowercase tags: `[invalid:github]`, `[invalid:x]`, `[invalid:portfolio]`, `[invalid:additional]`, `[invalid:duplicate]`, and `[invalid:irrelevant]`. Category tags remove their points; duplicate and irrelevant tags force `INVALID`.
 
-See [Architecture](docs/ARCHITECTURE.md), [Deployment](docs/DEPLOYMENT.md), and [Review response](docs/REVIEW_RESPONSE.md).
+See [Submission](docs/SUBMISSION.md), [Architecture](docs/ARCHITECTURE.md), [Deployment](docs/DEPLOYMENT.md), [Testing](docs/TESTING.md), and [Review response](docs/REVIEW_RESPONSE.md).
+
+## Live project and deployment proof
+
+- Live app: <https://proofscoreapp.vercel.app>
+- Repository: <https://github.com/Manablaq/proofscore>
+- Production contract: `0x0a4E4cBBF682aE0EdedE09865eD0A338518976C3`
+- Studio deployment transaction: `0xc9e7487b6300b305fa8ce9c12770f48e67c656cef17c006242f96b54eaf289bb`
+
+The deployment and smoke transactions are recorded as accepted with finalization pending. Exact hashes and observed accepted state are in [Deployment](docs/DEPLOYMENT.md).
 
 ## Contract interface
 
@@ -71,9 +80,14 @@ npm run lint
 npm run build
 npm audit
 PYTHONPYCACHEPREFIX=/private/tmp/proofscore-pycache python3 -m py_compile contracts/*.py
+node --check scripts/deploy-proofscore-v9.mjs
+node --check scripts/smoke-proofscore-v9.mjs
+node --check scripts/diagnose-v9-deploy.mjs
 git diff --check
 git status --short
 ```
+
+See [Testing](docs/TESTING.md) for scope, smoke-test behavior, and the difference between local checks and accepted-chain evidence.
 
 ## Scripts
 
@@ -82,3 +96,11 @@ git status --short
 - `npm run smoke:v9` requires `GENLAYER_DEPLOYER_PK` and `PROOFSCORE_V9_ADDRESS`, safely finds or creates a funded campaign, waits for accepted-state visibility, submits evidence, confirms canonical score state, and claims only if eligible. Set `SMOKE_CAMPAIGN_ID` to continue exactly one existing campaign and disable creation. Challenge submission is opt-in with `SMOKE_CHALLENGE=1`.
 
 Neither script retries a write after receiving a transaction hash. The deploy script exposes an address only after `FINISHED_WITH_RETURN` and a successful `get_stats` read. The smoke script backs off on transient Bradbury reads, polls all campaign views after acceptance, reuses one matching campaign on continuation, and fails explicitly on `UNDETERMINED` / `NO_MAJORITY`.
+
+## Honest limitations
+
+- Submitted URLs are evidence identifiers, not proof that a wallet owns an off-chain profile; the contract does not fetch or authenticate them.
+- Scoring is deliberately deterministic and category-based. It is consensus-safe and auditable, but does not judge the qualitative merit of the linked work.
+- There is no post-claim clawback. Later challenges remain recorded but cannot reverse a scheduled transfer.
+- Bradbury safety bounds limit the deployment to 25 campaigns, 25 submissions per campaign, and 25 leaderboard entries.
+- Some deployed user-triggerable validation paths use Python assertions. The frontend preflights campaign deadlines, so normal UI users receive readable validation before wallet submission. A malformed direct contract call can still be accepted with an execution error such as `AssertionError: Deadline must be in the future.` Replacing these assertions with readable `UserError` handling is **recommended hardening**, not a submission blocker; it changes deployed contract runtime behavior and therefore requires a new deployment and a complete smoke test.

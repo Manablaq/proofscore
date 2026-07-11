@@ -4,6 +4,10 @@
 
 Contract: `0x0a4E4cBBF682aE0EdedE09865eD0A338518976C3`
 
+Live app: <https://proofscoreapp.vercel.app>
+
+Repository: <https://github.com/Manablaq/proofscore>
+
 Studio deploy transaction: `0xc9e7487b6300b305fa8ce9c12770f48e67c656cef17c006242f96b54eaf289bb`
 
 This is the final accepted v9 production candidate. The deployment and smoke transactions below are recorded as accepted; accepted does not mean finalized. Treat them as **accepted / finalization pending** unless the explorer later reports `FINALIZED`. In particular, `claim_reward` scheduled payout finalization and does not establish that the external payout has finalized.
@@ -57,3 +61,9 @@ The smoke script spends testnet GEN. It polls repeatedly for an existing matchin
 Campaign requirements must use exact lowercase tokens when a category is mandatory: `[requires:github]`, `[requires:x]`, `[requires:portfolio]`, `[requires:additional]`. Score-affecting pre-claim creator challenges likewise use `[invalid:github]`, `[invalid:x]`, `[invalid:portfolio]`, `[invalid:additional]`, `[invalid:duplicate]`, or `[invalid:irrelevant]`.
 
 Once any write returns a hash, inspect that hash rather than resubmitting. `UNDETERMINED`, `NO_MAJORITY`, and deterministic-violation results are hard failures, not retry signals. Bradbury read backpressure is handled with bounded exponential delay. For production evidence, wait for `FINALIZED` before treating campaign creation, scoring, claim, or refund as irreversible.
+
+## Validation hardening note
+
+Some user-triggerable validation in this deployed contract uses assertions. A direct malformed `create_campaign` call with an invalid deadline produced `AssertionError: Deadline must be in the future.` The production frontend now validates the deadline before requesting a wallet transaction, including a ten-minute safety margin, so ordinary frontend users receive a readable preflight error without submitting the invalid call.
+
+Direct callers remain responsible for valid arguments and may receive accepted execution errors for malformed input. Replacing assertions with readable `UserError` handling is classified as **recommended hardening**, not a submission blocker. It would alter deployed contract behavior and therefore requires a new contract deployment plus the complete smoke suite; this audit does not make that change.

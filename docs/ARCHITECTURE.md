@@ -41,3 +41,5 @@ After the deadline, only the creator can close and schedule refund of the unallo
 ## Known limitation
 
 There is no clawback. Post-claim challenges are recorded as `RECORDED_NO_CLAWBACK` and cannot reverse the already scheduled transfer.
+
+The deployed contract also uses assertions for some user-triggerable validation. The production frontend preflights deadline input and blocks a deadline less than ten minutes in the future before wallet submission. Direct malformed calls can nevertheless be accepted at consensus while execution finishes with an error, including `AssertionError: Deadline must be in the future.` Migrating these paths to readable `UserError` handling is recommended hardening rather than a submission blocker. Because it changes contract runtime behavior, it would require a new deployment and full smoke testing.

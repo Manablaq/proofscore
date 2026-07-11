@@ -41,3 +41,7 @@ These results are **accepted / finalization pending**, not finalized, unless the
 The UI distinguishes submitted, accepted with finalization pending, finalized, and failed. A transaction hash is not presented as a state change. Campaign and score reads occur after acceptance. External payout/refund transfers are labeled scheduled for finalization until finality is actually reached.
 
 This makes validator consensus, canonical source handling, and settlement state essential to the product’s core value flow without allowing variable model prose to fork state.
+
+## Known validation limitation
+
+Some deployed user-triggerable validation uses assertions. The frontend prevents invalid campaign deadlines before wallet submission, but a malformed direct call can be accepted and then finish execution with an error such as `AssertionError: Deadline must be in the future.` Converting these paths to readable `UserError` handling is recommended hardening, not a submission blocker, and would require redeployment and a complete smoke test.

@@ -1,7 +1,0 @@
-
-> proofscore-frontend@0.1.0 deploy:v8
-> node scripts/deploy-v8.mjs
-
-{
-  "deployTransactionHash": "0xaf1f7497923fce7cd8a6e733237e1b6f6333d0ab08ed0c0ab9c99333f085647a"
-}
