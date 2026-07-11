@@ -277,6 +277,14 @@ if (challengeEnabled && submission.claimed !== true) {
     submission = await pollChallengeState(campaignId, submissionId, baseline)
     console.log(`Pre-claim challenge accepted and visible: decision=${submission.decision}, score=${submission.score}, eligible=${submission.eligible_to_claim}.`)
   }
+  const invalidatedCategories = Array.isArray(submission.invalidated_categories) ? submission.invalidated_categories : []
+  const additionalOnly = invalidatedCategories.length === 1 && invalidatedCategories[0] === 'additional'
+  if (additionalOnly && (submission.score !== 65 || submission.decision !== 'QUALIFIED' || submission.eligible_to_claim !== true)) {
+    throw new Error(`Additional-evidence invalidation must reduce the canonical smoke score from 85 to 65 while preserving threshold-45 eligibility. Observed: ${stringify(submission)}`)
+  }
+  if (submission.decision === 'INVALID' && submission.eligible_to_claim !== false) {
+    throw new Error(`An INVALID challenged submission must not remain eligible to claim. Observed: ${stringify(submission)}`)
+  }
 } else if (!challengeEnabled) {
   console.log('Challenge skipped. Set SMOKE_CHALLENGE=1 to exercise pre-claim deterministic invalidation.')
 } else {

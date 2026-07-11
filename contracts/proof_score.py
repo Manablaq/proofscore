@@ -5,6 +5,11 @@ from datetime import datetime
 import json
 
 
+MAX_CAMPAIGNS = 25
+MAX_SUBMISSIONS_PER_CAMPAIGN = 25
+MAX_LEADERBOARD_ENTRIES = 25
+
+
 @gl.evm.contract_interface
 class _Recipient:
     class View:
@@ -194,6 +199,7 @@ class ProofScore(gl.Contract):
         deadline: int,
         evidence_requirements: str,
     ) -> None:
+        assert _integer(self.campaign_count) < MAX_CAMPAIGNS, "Campaign limit reached."
         assert 3 <= len(title) <= 100, "Title must be 3-100 characters."
         assert 1 <= len(description) <= 1200, "Description is required."
         assert 1 <= threshold_score <= 100, "Threshold must be 1-100."
@@ -244,6 +250,7 @@ class ProofScore(gl.Contract):
         campaign = self._campaign(campaign_id)
         assert campaign["status"] == "OPEN", "Campaign is not open."
         assert _now() <= _integer(campaign["deadline"]), "Campaign deadline has passed."
+        assert _integer(campaign["submissions_count"]) < MAX_SUBMISSIONS_PER_CAMPAIGN, "Campaign submission limit reached."
         assert 2 <= len(handle) <= 80, "Handle must be 2-80 characters."
         submitter = str(gl.message.sender_address)
         builder_key = campaign_id + ":" + submitter
@@ -301,39 +308,58 @@ class ProofScore(gl.Contract):
         self._rank(submission)
 
     def _rank(self, submission: dict) -> None:
-        entry = _canonical_json({
+        entry = {
             "campaign_id": submission["campaign_id"],
             "submission_id": submission["submission_id"],
             "builder": submission["builder"],
             "handle": submission["handle"],
             "score": submission["score"],
             "decision": submission["decision"],
-        })
+        }
         key = submission["campaign_id"] + ":" + submission["submission_id"]
-        found = -1
-        for i in range(len(self.leaderboard)):
+        entries = []
+        seen_keys = []
+        for campaign_id in self.campaign_ids:
             try:
-                old = json.loads(self.leaderboard[i])
-                if old["campaign_id"] + ":" + old["submission_id"] == key:
-                    found = i
-                    break
+                submission_ids = json.loads(self.submission_ids.get(campaign_id, "[]"))
             except:
-                pass
-        if found >= 0:
-            self.leaderboard.pop(found)
-        inserted = False
-        for i in range(len(self.leaderboard)):
-            try:
-                if _integer(json.loads(self.leaderboard[i]).get("score", 0)) < _integer(submission["score"]):
-                    self.leaderboard.insert(i, entry)
-                    inserted = True
-                    break
-            except:
-                pass
-        if not inserted:
-            self.leaderboard.append(entry)
-        while len(self.leaderboard) > 50:
-            self.leaderboard.pop(len(self.leaderboard) - 1)
+                submission_ids = []
+            for submission_id in submission_ids:
+                try:
+                    persisted_key = campaign_id + ":" + submission_id
+                    if persisted_key in seen_keys:
+                        continue
+                    if persisted_key == key:
+                        candidate = submission
+                    else:
+                        raw = self.submissions.get(persisted_key, None)
+                        if raw is None:
+                            continue
+                        candidate = json.loads(raw)
+                    entries.append({
+                        "campaign_id": candidate["campaign_id"],
+                        "submission_id": candidate["submission_id"],
+                        "builder": candidate["builder"],
+                        "handle": candidate["handle"],
+                        "score": candidate["score"],
+                        "decision": candidate["decision"],
+                    })
+                    seen_keys.append(persisted_key)
+                except:
+                    pass
+        if key not in seen_keys:
+            entries.append(entry)
+        entries.sort(key=lambda item: (
+            -_integer(item.get("score", 0)),
+            _integer(item.get("campaign_id", 0)),
+            _integer(item.get("submission_id", 0)),
+            str(item.get("builder", "")),
+            str(item.get("handle", "")),
+        ))
+        while len(self.leaderboard) > 0:
+            self.leaderboard.pop()
+        for item in entries[:MAX_LEADERBOARD_ENTRIES]:
+            self.leaderboard.append(_canonical_json(item))
 
     @gl.public.write
     def claim_reward(self, campaign_id: str, submission_id: str) -> None:
@@ -523,6 +549,9 @@ class ProofScore(gl.Contract):
     def get_stats(self) -> str:
         return _canonical_json({
             "contract_version": "v9",
+            "max_campaigns": MAX_CAMPAIGNS,
+            "max_submissions_per_campaign": MAX_SUBMISSIONS_PER_CAMPAIGN,
+            "max_leaderboard_entries": MAX_LEADERBOARD_ENTRIES,
             "campaigns": self.campaign_count,
             "submissions": self.submission_count,
             "challenges": self.challenge_count,

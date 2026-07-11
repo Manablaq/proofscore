@@ -6,6 +6,8 @@ ProofScore v8 was advisory only: it produced an evidence-backed score, but that 
 
 ProofScore v9 is an evidence-settled builder bounty protocol. A sponsor locks a real GEN reward pool and chooses a minimum score. Accepted canonical score state directly controls campaign eligibility: only a `QUALIFIED` submission at or above the threshold can call `claim_reward`, which debits campaign escrow and schedules the builder payout for finalization.
 
+For Bradbury/testnet safety, v9 accepts at most 25 campaigns and 25 submissions per campaign and retains an exact top-25 leaderboard. Full leaderboard recomputation is bounded to at most 625 stored candidates, so a challenged score decrease can correctly promote an omitted candidate without making ranking work grow indefinitely. The limits are exposed by `get_stats`.
+
 ## Why GenLayer consensus is essential
 
 Validator consensus remains essential because the accepted score and eligibility state authorize a value-bearing claim from locked campaign funds. After a Bradbury smoke submission produced divergent validator result hashes and `NO_MAJORITY`, scoring was deliberately narrowed to a deterministic, reviewable rubric. Consensus now agrees on identical canonical state instead of attempting to store each validator's freeform judgment.

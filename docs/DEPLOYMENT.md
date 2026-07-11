@@ -4,6 +4,10 @@ Deployment is intentionally separate from implementation. Do not reuse an earlie
 
 The earlier source was deployed at `0xE01239760aA51069107B27915b63583E6fd91b3f`, but it is not production-ready. Its first `submit_builder_profile` transaction (`0xb8b4cf0189d4a24b28381aafd21c47eb09a5ff7134dd7f1a97f76dbf0a5e3b4c`) ended `UNDETERMINED` / `NO_MAJORITY` and was not accepted. Do not resubmit that transaction. Do not update the production address to this deployment or any replacement until a fresh deployment passes the complete accepted-state smoke test.
 
+The hardened source at `0xD09cF426b9CeA68ff6106b9ce098399100e03303` passed accepted create, submit, and claim smoke transactions with `FINISHED_WITH_RETURN`, but it is not final production. Campaign 2 challenge transaction `0xd85069809c52741850325799689c19ef7aefb99faf9c9691578f8f120a82d749` finalized with consensus `AGREE` but execution `FINISHED_WITH_ERROR` because its leaderboard rerank used unsupported indexed `DynArray.pop`. Do not update the production address until a fresh deployment passes create/submit/challenge/claim smoke, or create/submit/challenge/no-claim smoke when the challenge intentionally makes the submission ineligible.
+
+This source intentionally limits v9 to 25 campaigns, 25 submissions per campaign, and a top-25 leaderboard for Bradbury/testnet safety. Exact leaderboard rebuilding is consequently capped at 625 candidates. These runtime and storage-bound changes require a fresh deployment; no previous address is production-ready.
+
 ## Preflight
 
 Run the repository verification commands from the README. Fund a dedicated Bradbury deployer and export its private key only in the current shell:
@@ -28,7 +32,7 @@ Optionally override `NEXT_PUBLIC_GENLAYER_RPC`. Build and deploy the frontend se
 
 Set `GENLAYER_DEPLOYER_PK` securely in the current shell, set `PROOFSCORE_V9_ADDRESS` to the deployed address, then run `npm run smoke:v9`.
 
-The smoke script spends testnet GEN. It polls repeatedly for an existing matching campaign before creating one, waits for acceptance, and polls campaign, submission, claim, and stats views until each accepted state is visible. Set `SMOKE_CAMPAIGN_ID` to continue only that exact campaign and prohibit creation. Otherwise set `SMOKE_CAMPAIGN_TITLE` to a stable lookup key. `SMOKE_REWARD_WEI` controls the small test reward; `SMOKE_CHALLENGE=1` opts into challenge recording.
+The smoke script spends testnet GEN. It polls repeatedly for an existing matching campaign before creating one, waits for acceptance, and polls campaign, submission, claim, and stats views until each accepted state is visible. Set `SMOKE_CAMPAIGN_ID` to continue only that exact campaign and prohibit creation. Otherwise set `SMOKE_CAMPAIGN_TITLE` to a stable lookup key. `SMOKE_REWARD_WEI` controls the small test reward; `SMOKE_CHALLENGE=1` exercises pre-claim additional-evidence invalidation. That path verifies the canonical score falls from 85 to 65, remains eligible at threshold 45, and then claims. If a future challenge forces `INVALID` or otherwise removes eligibility, claim is skipped safely.
 
 Campaign requirements must use exact lowercase tokens when a category is mandatory: `[requires:github]`, `[requires:x]`, `[requires:portfolio]`, `[requires:additional]`. Score-affecting pre-claim creator challenges likewise use `[invalid:github]`, `[invalid:x]`, `[invalid:portfolio]`, `[invalid:additional]`, `[invalid:duplicate]`, or `[invalid:irrelevant]`.
 

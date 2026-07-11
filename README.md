@@ -14,6 +14,8 @@ This is an evidence-backed reputation assessment, not identity verification. A s
 
 One builder wallet can submit only once per campaign. GitHub evidence must use `https://github.com/...`; X evidence must use `https://x.com/...` or `https://twitter.com/...`.
 
+ProofScore v9 is intentionally bounded for Bradbury/testnet safety: at most 25 campaigns, 25 submissions per campaign, and 25 leaderboard entries. These limits keep exact full-submission leaderboard recomputation bounded to at most 625 candidates, including when a challenge lowers a score and promotes a previously omitted submission.
+
 Campaign requirements use only these exact lowercase tokens: `[requires:github]`, `[requires:x]`, `[requires:portfolio]`, and `[requires:additional]`. Other requirement prose remains descriptive and does not silently create mandatory categories.
 
 Score-affecting creator challenges use only these exact lowercase tags: `[invalid:github]`, `[invalid:x]`, `[invalid:portfolio]`, `[invalid:additional]`, `[invalid:duplicate]`, and `[invalid:irrelevant]`. Category tags remove their points; duplicate and irrelevant tags force `INVALID`.

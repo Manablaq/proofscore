@@ -18,7 +18,7 @@ Counter-evidence challenge ────────────┘          clai
 - A submission stores validated evidence URLs/notes plus a deterministic score, decision, five weighted dimensions, exact-token requirement flags, eligibility, claim state, cumulative invalidations, and revisions. A builder wallet has one submission slot per campaign.
 - A challenge stores bounded counter-evidence, prior/revised results, verdict, and settlement effect. Only pre-claim campaign-creator challenges carrying supported exact tags can change eligibility.
 
-Collections are JSON-string records keyed in `TreeMap`; ordered IDs are stored separately for robust JSON-string views. The leaderboard is a bounded top-50 accepted-score index.
+Collections are JSON-string records keyed in `TreeMap`; ordered IDs are stored separately for robust JSON-string views. ProofScore v9 intentionally caps the protocol at 25 campaigns and 25 submissions per campaign for Bradbury/testnet safety. The exact top-25 leaderboard can therefore be rebuilt from at most 625 persisted submissions after a submit or score-changing challenge, without unbounded historical scanning. Create, submit, challenge reranking, and claim execution remain bounded within these stored protocol limits.
 
 ## Consensus-safe scoring
 
