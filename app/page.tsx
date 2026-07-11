@@ -28,6 +28,11 @@ type Challenge = {
   challenge_url: string; created_at: number
 }
 
+type ContractStats = {
+  campaigns?: number | string; submissions?: number | string; challenges?: number | string
+  claims_scheduled?: number | string; total_locked_wei?: string; contract_version?: string
+}
+
 type TxState = { phase: 'idle' | 'submitted' | 'accepted' | 'finalized' | 'failed'; hash?: string; detail?: string }
 
 const chainHex = `0x${BRADBURY_CHAIN_ID.toString(16)}`
@@ -38,6 +43,17 @@ function asArray<T>(value: unknown): T[] {
     try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : [] } catch { return [] }
   }
   return []
+}
+
+function parseContractStats(value: unknown): ContractStats | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as ContractStats
+  if (typeof value !== 'string') return null
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as ContractStats : null
+  } catch {
+    return null
+  }
 }
 
 async function readContract(method: string, args: unknown[] = []) {
@@ -108,6 +124,16 @@ function gen(wei: string) {
 
 function short(address: string) { return address ? `${address.slice(0, 6)}…${address.slice(-4)}` : '—' }
 
+const KNOWN_FINAL_V9_DEPLOYMENT_ADDRESS = '0x0a4E4cBBF682aE0EdedE09865eD0A338518976C3'
+
+const proofTransactions = [
+  ['Studio deploy tx', '0xc9e7487b6300b305fa8ce9c12770f48e67c656cef17c006242f96b54eaf289bb'],
+  ['create_campaign', '0x91d2dcb5dd9445bcad04c85fda7b10e75fbf5e61ec028691627e93d14942a0d9'],
+  ['submit_builder_profile', '0xbc2b1669f528a12e8b97694db7809c8f51f58d2ce62a004a7bc1cd1de8a30478'],
+  ['challenge_score', '0xe6ca01a9a7cf00132fb09f8bdb14f67fd09dcd80442a2e2a90089785efe72aea'],
+  ['claim_reward', '0x633c79ac18b7e70b5b524adfde595c2daf747954b460ca82ac13a8ed1bfd2070'],
+] as const
+
 function TxNotice({ state }: { state: TxState }) {
   if (state.phase === 'idle') return null
   return <div className={`tx tx-${state.phase}`}>
@@ -125,21 +151,32 @@ function ScoreRing({ score }: { score: number }) {
 
 export default function Home() {
   const { address, isConnected } = useAccount()
+  const hasRecordedDeploymentProof = PROOFSCORE_IS_CONFIGURED && PROOFSCORE_CONTRACT_ADDRESS.toLowerCase() === KNOWN_FINAL_V9_DEPLOYMENT_ADDRESS.toLowerCase()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  const [stats, setStats] = useState<ContractStats | null>(null)
   const [selectedId, setSelectedId] = useState('')
   const [submissions, setSubmissions] = useState<Submission[]>([])
   const [challenges, setChallenges] = useState<Record<string, Challenge[]>>({})
   const [loading, setLoading] = useState(true)
-  const [renderedAt] = useState(() => Date.now())
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const [error, setError] = useState('')
   const [tx, setTx] = useState<TxState>({ phase: 'idle' })
   const selected = campaigns.find(campaign => campaign.campaign_id === selectedId)
+  const isV9Live = PROOFSCORE_IS_CONFIGURED && String(stats?.contract_version).toLowerCase() === 'v9'
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNowMs(Date.now()), 30_000)
+    return () => window.clearInterval(interval)
+  }, [])
 
   const refreshCampaigns = useCallback(async () => {
     if (!PROOFSCORE_IS_CONFIGURED) { setLoading(false); return }
     try {
-      const list = asArray<Campaign>(await readContract('list_campaigns'))
+      const [campaignResult, statsResult] = await Promise.allSettled([readContract('list_campaigns'), readContract('get_stats')])
+      if (campaignResult.status === 'rejected') throw campaignResult.reason
+      const list = asArray<Campaign>(campaignResult.value)
       setCampaigns(list)
+      setStats(statsResult.status === 'fulfilled' ? parseContractStats(statsResult.value) : null)
       setSelectedId(current => current || list[0]?.campaign_id || '')
       setError('')
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not load campaigns.') }
@@ -197,15 +234,16 @@ export default function Home() {
 
   return <main>
     <div className="aurora aurora-one" /><div className="aurora aurora-two" />
-    <nav><a className="brand" href="#top"><span>PS</span> ProofScore <em>v9</em></a><div className="nav-right"><a href="#campaigns">Campaigns</a><a href="#create">Sponsor</a><ConnectButton /></div></nav>
+    <nav className="top-nav"><div className="nav-shell"><a className="brand" href="#overview"><span>PS</span> ProofScore <em>v9</em></a><div className="nav-links" aria-label="Primary navigation"><a href="#overview">Overview</a><a href="#campaigns">Campaigns</a><a href="#submit-evidence">Submit Evidence</a><a href="#challenge">Challenge</a><a href="#claim">Claim</a><a href="#deployment-proof">Deployment Proof</a></div><div className="wallet-control"><ConnectButton /></div></div></nav>
 
-    <section className="hero" id="top">
-      <div className="eyebrow">GENLAYER-NATIVE · CONTESTABLE SETTLEMENT</div>
-      <h1>Reputation that<br /><span>settles rewards.</span></h1>
-      <p>Scores are no longer badges. They decide campaign eligibility and payout release.</p>
-      <div className="hero-actions"><a className="button primary" href="#campaigns">Explore campaigns</a><a className="button ghost" href="#create">Fund a bounty</a></div>
+    <section className="hero" id="overview">
+      <div className="hero-copy"><div className="eyebrow"><i /> LIVE ON GENLAYER BRADBURY</div>
+      <h1>Evidence-settled<br /><span>builder bounties.</span></h1>
+      <p>Evidence-settled builder bounty protocol on GenLayer. Sponsors fund outcomes, canonical scores gate eligibility, and every decision remains contestable.</p>
+      <div className="hero-actions"><a className="button primary" href="#create">Create Campaign</a><a className="button secondary" href="#submit-evidence">Submit Builder Evidence</a><a className="button ghost" href="#dashboard">View Live Contract State</a></div></div>
+      <aside className="contract-card">{PROOFSCORE_IS_CONFIGURED ? <><div className="contract-card-head"><span className="live-pulse" /> <strong>{isV9Live ? 'v9 live' : 'Contract configured'}</strong><span>Bradbury testnet</span></div><small>{isV9Live ? 'CONFIRMED V9 CONTRACT' : 'CONFIGURED CONTRACT'}</small><code>{PROOFSCORE_CONTRACT_ADDRESS}</code><div className="contract-meta"><span>Evidence scoring</span><b>Contestable settlement</b></div><a href={`${BRADBURY_EXPLORER}/address/${PROOFSCORE_CONTRACT_ADDRESS}`} target="_blank" rel="noreferrer">Inspect contract ↗</a></> : <><div className="contract-card-head preview"><strong>Preview mode</strong><span>Live reads disabled</span></div><small>CONTRACT CONFIGURATION</small><div className="config-empty">No v9 contract configured</div><p className="config-copy">Set NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS to enable live reads and writes.</p></>}</aside>
       <div className="flow">
-        {['Campaign', 'Evidence', 'Validator score', 'Claim reward', 'Challenge'].map((step, index) => <div key={step}><b>0{index + 1}</b><span>{step}</span>{index < 4 && <i>→</i>}</div>)}
+        {['Sponsor locks reward', 'Builder submits evidence', 'Score gates eligibility', 'Challenge can reduce / deny', 'Qualified builder claims'].map((step, index) => <div key={step}><b>0{index + 1}</b><span>{step}</span>{index < 4 && <i>→</i>}</div>)}
       </div>
       <p className="truth-note">Evidence-backed reputation assessment. ProofScore does not prove identity or ownership of submitted profiles.</p>
     </section>
@@ -213,34 +251,47 @@ export default function Home() {
     {!PROOFSCORE_IS_CONFIGURED && <section className="config-warning"><strong>V9 preview mode</strong><span>No v9 address is configured, so writes and live reads are disabled. Deploy separately and set <code>NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS</code>.</span></section>}
     <TxNotice state={tx} />{error && <div className="error">{error}</div>}
 
+    <section className="section dashboard" id="dashboard">
+      <header className="section-head"><div><span className="eyebrow">LIVE CONTRACT TELEMETRY</span><h2>Protocol overview</h2></div><div className="state-legend"><span className="live-pulse" /> Latest accepted state <small>Finalization may be pending</small></div></header>
+      {loading ? <div className="stats-grid loading-grid">{Array.from({ length: 6 }, (_, index) => <div className="stat-card skeleton" key={index} />)}</div> : !stats ? <div className="empty"><strong>Contract telemetry unavailable</strong><span>Campaign data may still be available below. Refresh to retry the live read.</span></div> : <div className="stats-grid">
+        {[['Campaigns', stats.campaigns], ['Submissions', stats.submissions], ['Challenges', stats.challenges], ['Claims scheduled', stats.claims_scheduled], ['Total locked', gen(stats.total_locked_wei ?? '0')], ['Contract version', stats.contract_version ?? '—']].map(([label, value]) => <div className="stat-card" key={String(label)}><small>{label}</small><strong>{String(value ?? '—')}</strong>{label === 'Contract version' && isV9Live && <span className="live-badge"><i /> v9 live</span>}</div>)}
+      </div>}
+      <p className="finality-note"><b>Accepted / finalization pending:</b> live reads use the latest accepted contract state. A scheduled claim is not described as paid until finality is known.</p>
+    </section>
+
     <section className="section" id="campaigns">
       <header className="section-head"><div><span className="eyebrow">OPEN SETTLEMENTS</span><h2>Builder campaigns</h2></div><button className="mini-button" onClick={() => { refreshCampaigns(); refreshSelected() }}>Refresh accepted state</button></header>
       {loading ? <div className="empty">Reading accepted contract state…</div> : campaigns.length === 0 ? <div className="empty">No live v9 campaigns. This interface does not fabricate campaign data.</div> : <div className="campaign-grid">
-        {campaigns.map(campaign => <button className={`campaign-card ${selectedId === campaign.campaign_id ? 'selected' : ''}`} key={campaign.campaign_id} onClick={() => setSelectedId(campaign.campaign_id)}>
+        {campaigns.map(campaign => <article className={`campaign-card ${selectedId === campaign.campaign_id ? 'selected' : ''}`} key={campaign.campaign_id} role="button" tabIndex={0} aria-pressed={selectedId === campaign.campaign_id} onClick={() => setSelectedId(campaign.campaign_id)} onKeyDown={event => { if (event.target !== event.currentTarget || (event.key !== 'Enter' && event.key !== ' ')) return; event.preventDefault(); setSelectedId(campaign.campaign_id) }}>
           <div className="card-top"><span className={`status ${campaign.status.toLowerCase()}`}>{campaign.status}</span><span>#{campaign.campaign_id}</span></div>
           <h3>{campaign.title}</h3><p>{campaign.description}</p>
-          <div className="campaign-stats"><div><small>Threshold</small><strong>{campaign.threshold_score}</strong></div><div><small>Reward</small><strong>{gen(campaign.reward_per_qualified_builder)}</strong></div><div><small>Pool left</small><strong>{gen(campaign.remaining_pool)}</strong></div></div>
-          <footer><span>{campaign.submissions_count} submissions · {campaign.qualified_count} qualified</span><span>{new Date(campaign.deadline * 1000).toLocaleDateString()}</span></footer>
-        </button>)}
+          <div className="campaign-stats"><div><small>Threshold</small><strong>{campaign.threshold_score}/100</strong></div><div><small>Total pool</small><strong>{gen(campaign.total_pool)}</strong></div><div><small>Remaining</small><strong>{gen(campaign.remaining_pool)}</strong></div><div><small>Qualified</small><strong>{campaign.qualified_count}</strong></div></div>
+          <footer><span>{campaign.submissions_count} submissions</span><span>Deadline {new Date(campaign.deadline * 1000).toLocaleDateString()}</span></footer>
+          <button className="card-action" disabled={campaign.status !== 'OPEN' || campaign.deadline * 1000 < nowMs} onClick={event => { event.stopPropagation(); setSelectedId(campaign.campaign_id); window.setTimeout(() => document.querySelector('#submit-evidence')?.scrollIntoView({ behavior: 'smooth' }), 0) }}>{campaign.status === 'OPEN' && campaign.deadline * 1000 >= nowMs ? 'Submit Evidence →' : campaign.status === 'EXHAUSTED' ? 'Reward pool exhausted' : 'Campaign unavailable'}</button>
+        </article>)}
       </div>}
     </section>
 
-    {selected && <section className="section detail">
+    {selected && <section className="section detail" id="submit-evidence">
       <div className="detail-header"><div><span className="eyebrow">CAMPAIGN #{selected.campaign_id}</span><h2>{selected.title}</h2><p>{selected.description}</p></div><div className="pool"><small>Remaining escrow</small><strong>{gen(selected.remaining_pool)}</strong><span>{gen(selected.reward_per_qualified_builder)} per accepted builder</span></div></div>
       <div className="requirements"><strong>Evidence requirements</strong><p>{selected.evidence_requirements}</p><span>Deadline {new Date(selected.deadline * 1000).toLocaleString()}</span></div>
-      {selected.status === 'OPEN' && selected.deadline * 1000 >= renderedAt && <form className="glass-form" onSubmit={submitProfile}>
-        <div className="form-title"><span>Builder evidence</span><small>Validated source categories and context receive deterministic weights. One submission per wallet.</small></div>
-        <div className="form-grid"><label>Handle<input required name="handle" placeholder="builder-name" /></label><label>GitHub URL<input name="github" type="url" placeholder="https://github.com/…" /></label><label>X URL<input name="x" type="url" placeholder="https://x.com/…" /></label><label>Portfolio URL<input name="portfolio" type="url" placeholder="https://…" /></label><label className="wide">Additional evidence URL<input name="additional" type="url" placeholder="Project, case study, or source URL" /></label><label className="wide">Evidence notes<textarea name="notes" placeholder="Explain what each source supports. Avoid identity claims." /></label></div>
+      {selected.status === 'OPEN' && selected.deadline * 1000 >= nowMs && <form className="glass-form" onSubmit={submitProfile}>
+        <div className="form-title"><span><b>01</b> Submit builder evidence</span><small>One submission per wallet. Provide public, directly accessible URLs that clearly support your work.</small></div>
+        <div className="form-grid"><label>Handle <small>Your public builder or team handle.</small><input required name="handle" placeholder="builder-name" /></label><label>GitHub URL <small>Full github.com profile or repository URL.</small><input name="github" type="url" placeholder="https://github.com/…" /></label><label>X URL <small>Full x.com profile or relevant post URL.</small><input name="x" type="url" placeholder="https://x.com/…" /></label><label>Portfolio URL <small>Public portfolio, product, or case-study URL.</small><input name="portfolio" type="url" placeholder="https://…" /></label><label className="wide">Additional evidence URL <small>One additional public project, demo, or source URL.</small><input name="additional" type="url" placeholder="https://…" /></label><label className="wide">Notes <small>Explain what the evidence demonstrates; avoid unsupported identity claims.</small><textarea name="notes" placeholder="Concise evidence context and contribution details…" /></label></div>
+        <div className="scoring-preview"><strong>Scoring framework</strong><div><span>GitHub <b>25</b></span><span>X <b>15</b></span><span>Portfolio <b>20</b></span><span>Additional <b>20</b></span><span>Notes <b>up to 20</b></span></div><p>This is the category weighting—not a score estimate. The canonical result is read back from the contract after acceptance.</p></div>
         <button className="button primary" disabled={!isConnected || !PROOFSCORE_IS_CONFIGURED}>Submit for canonical scoring</button>
       </form>}
 
-      <div className="submission-list">
+      {address && submissions.some(item => item.builder.toLowerCase() === address.toLowerCase()) && <div className="readback"><span>Canonical result available</span><p>Your accepted submission appears below with its contract score, decision, dimensions, eligibility, and payout status.</p></div>}
+
+      <div className="challenge-intro" id="challenge"><span className="eyebrow">CONTESTABLE BY DESIGN</span><p>Any user can record public counter-evidence. Only the campaign creator can apply valid tags to change score or eligibility before claim; post-claim challenges remain a transparent record with no payout reversal.</p></div>
+      <div className="submission-list" id="claim">
         <div className="section-head compact"><div><span className="eyebrow">ACCEPTED ASSESSMENTS</span><h3>Submissions</h3></div></div>
         {submissions.length === 0 ? <div className="empty">No accepted submissions yet.</div> : submissions.map(submission => <article className="submission" key={submission.submission_id}>
           <div className="submission-main"><ScoreRing score={submission.score} /><div className="submission-copy"><div className="badges"><span className={`decision ${submission.decision.toLowerCase()}`}>{submission.decision.replace('_', ' ')}</span>{submission.eligible_to_claim && <span className="decision eligible">ELIGIBLE TO CLAIM</span>}{submission.claimed && <span className="decision claimed">CLAIMED · FINALIZATION DEPENDENT</span>}{submission.challenge_count > 0 && <span className="decision challenged">CHALLENGED</span>}{submission.revision_count > 0 && <span className="decision revised">REVISED</span>}</div><h3>{submission.handle}</h3><span className="wallet">Builder {short(submission.builder)} · Confidence {submission.confidence}</span><p>{submission.evidence_summary}</p><details><summary>Canonical score record</summary><p>{submission.reasoning}</p><div className="source-columns"><div><b>Accepted sources</b>{submission.accepted_sources.map(source => <span key={source}>{source}</span>)}</div><div><b>Risk flags</b>{submission.risk_flags.length ? submission.risk_flags.map(flag => <span key={flag}>{flag}</span>) : <span>None recorded</span>}</div></div></details></div></div>
           <div className="dimensions">{Object.entries(submission.dimensions).map(([name, value]) => { const max = name === 'github' ? 25 : name === 'x' ? 15 : 20; return <div key={name}><span>{name}</span><i><b style={{ width: `${value / max * 100}%` }} /></i><strong>{value}/{max}</strong></div> })}</div>
-          {submission.eligible_to_claim && address?.toLowerCase() === submission.builder.toLowerCase() && <button className="button claim" onClick={() => runWrite('claim_reward', [selected.campaign_id, submission.submission_id])}>Claim {gen(selected.reward_per_qualified_builder)}</button>}
-          <div className="challenge-zone"><form onSubmit={event => challenge(event, submission.submission_id)}><strong>Challenge this score</strong><input required type="url" name="challenge_url" placeholder="Counter-evidence URL" /><textarea required minLength={10} name="reason" placeholder="Creator tags: [invalid:github], [invalid:x], [invalid:portfolio], [invalid:additional], [invalid:duplicate], [invalid:irrelevant]" /><button className="mini-button" disabled={!isConnected || !PROOFSCORE_IS_CONFIGURED}>Submit contestable challenge</button></form>
+          {submission.eligible_to_claim && !submission.claimed && address?.toLowerCase() === submission.builder.toLowerCase() && <div className="claim-panel"><div><strong>Reward eligible</strong><span>Claiming schedules {gen(selected.reward_per_qualified_builder)} for finalization. It is not paid until finality is known.</span></div><button className="button claim" onClick={() => runWrite('claim_reward', [selected.campaign_id, submission.submission_id])}>Schedule reward claim</button></div>}
+          <div className="challenge-zone"><form onSubmit={event => challenge(event, submission.submission_id)}><strong>Challenge this score</strong><small>{submission.claimed ? 'Post-claim challenges are recorded for transparency and do not claw back scheduled payouts.' : address?.toLowerCase() === selected.creator.toLowerCase() ? 'Creator challenge: valid tags can recompute score and eligibility before claim.' : 'This challenge will be recorded as counter-evidence. Only the campaign creator can change score/eligibility before claim.'}</small><input required type="url" name="challenge_url" placeholder="https://… counter-evidence URL" /><div className="tag-list" aria-label="Valid challenge tags">{['github', 'x', 'portfolio', 'additional', 'duplicate', 'irrelevant'].map(tag => <code key={tag}>[invalid:{tag}]</code>)}</div><textarea required minLength={10} name="reason" placeholder="Explain the issue and include applicable validation tags…" /><button className="mini-button" disabled={!isConnected || !PROOFSCORE_IS_CONFIGURED}>Submit contestable challenge</button></form>
             {(challenges[submission.submission_id] ?? []).length > 0 && <div className="timeline"><strong>Challenge timeline</strong>{challenges[submission.submission_id].map(item => <div className="timeline-item" key={item.challenge_id}><i /><div><span>#{item.challenge_id} · {item.verdict} · score {item.revised_score}</span><p>{item.reasoning}</p><small>{item.settlement_effect.replaceAll('_', ' ')} · {new Date(item.created_at * 1000).toLocaleString()}</small></div></div>)}</div>}
           </div>
         </article>)}
@@ -248,6 +299,8 @@ export default function Home() {
     </section>}
 
     <section className="section create" id="create"><div><span className="eyebrow">SPONSOR A SETTLEMENT</span><h2>Create and fund a campaign</h2><p>The deposited GEN becomes the campaign reward pool. Every accepted score at or above your threshold unlocks one fixed claim, while creator counter-evidence can revise eligibility before claim.</p></div><form className="glass-form" onSubmit={createCampaign}><div className="form-grid"><label>Campaign title<input required name="title" minLength={3} maxLength={100} /></label><label>Minimum ProofScore<input required name="threshold" type="number" min="1" max="100" defaultValue="70" /></label><label>Reward per builder (GEN)<input required name="reward" type="number" min="0.000001" step="0.000001" /></label><label>Funded reward slots<input required name="slots" type="number" min="1" defaultValue="3" /></label><label>Deadline<input required name="deadline" type="datetime-local" /></label><label className="wide">Description<textarea required name="description" /></label><label className="wide">Evidence requirements<textarea required name="requirements" placeholder="Exact tokens: [requires:github] [requires:x] [requires:portfolio] [requires:additional]" /></label></div><button className="button primary" disabled={!isConnected || !PROOFSCORE_IS_CONFIGURED}>Create campaign + deposit pool</button><small>Payable value is sent in wei. The transaction hash is immediate; campaign state appears only after acceptance.</small></form></section>
+
+    <section className="section proof-section" id="deployment-proof"><header className="section-head"><div><span className="eyebrow">DEPLOYMENT RECORD</span><h2>Deployment proof</h2></div><span className={`proof-seal ${hasRecordedDeploymentProof ? '' : 'unavailable'}`}>{hasRecordedDeploymentProof ? '✓ ON-CHAIN PROOF' : 'PROOF NOT RECORDED'}</span></header><div className="proof-card"><div className="proof-contract">{PROOFSCORE_IS_CONFIGURED ? <><span>Configured ProofScore contract</span><code>{PROOFSCORE_CONTRACT_ADDRESS}</code><a href={`${BRADBURY_EXPLORER}/address/${PROOFSCORE_CONTRACT_ADDRESS}`} target="_blank" rel="noreferrer">View configured contract ↗</a></> : <><span>Contract configuration</span><div className="config-empty">No v9 contract configured</div><p className="config-copy">Set NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS to enable live reads and writes.</p></>}</div>{hasRecordedDeploymentProof ? <div className="proof-list">{proofTransactions.map(([label, hash], index) => <a href={`${BRADBURY_EXPLORER}/tx/${hash}`} target="_blank" rel="noreferrer" key={hash}><i>{String(index + 1).padStart(2, '0')}</i><span><small>{label}</small><code>{hash}</code></span><b>↗</b></a>)}</div> : <div className="proof-unavailable"><span>Deployment proof unavailable</span><p>{PROOFSCORE_IS_CONFIGURED ? 'Deployment proof is available only for the recorded final v9 deployment. This configured address does not match the recorded proof bundle.' : 'No proof transactions are shown because a v9 contract is not configured.'}</p></div>}</div>{hasRecordedDeploymentProof && <p className="proof-note">Transaction references are fixed deployment artifacts. Explorer status is the source of truth for finality.</p>}</section>
 
     <footer className="site-footer"><span>ProofScore v9 · GenLayer Bradbury</span><span>Accepted is not finalized. Payout transfers execute on finalization.</span><a href={BRADBURY_EXPLORER} target="_blank" rel="noreferrer">Explorer ↗</a></footer>
   </main>
