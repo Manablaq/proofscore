@@ -91,10 +91,11 @@ try {
 }
 
 console.log(`Accepted — finalization pending: deploy tx ${hash}`)
-console.log(stringify({ acceptedReceipt: receipt }))
 
 if (receipt.txExecutionResultName !== EXPECTED_EXECUTION_RESULT) {
-  throw new Error(`Deploy tx reached ACCEPTED without ${EXPECTED_EXECUTION_RESULT}. Inspect it and do not resubmit blindly.\nBradbury explorer: ${BRADBURY_EXPLORER}/tx/${hash}\nReceipt: ${stringify(receipt)}`)
+  console.error(`FAILED deployment: ${receipt.txExecutionResultName ?? 'UNKNOWN_EXECUTION_RESULT'}`)
+  console.error('Do not update env, docs, or frontend. No address from this transaction is usable.')
+  throw new Error(`Deploy tx reached a decided state without ${EXPECTED_EXECUTION_RESULT}. Inspect it and do not resubmit blindly.\nBradbury explorer: ${BRADBURY_EXPLORER}/tx/${hash}\nRun: node scripts/diagnose-v9-deploy.mjs ${hash}`)
 }
 
 const addressCandidates = [...collectAddressCandidates(receipt)]
@@ -102,15 +103,27 @@ const contractAddress = ADDRESS_PATTERN.test(receipt?.recipient ?? '') && receip
   ? receipt.recipient
   : addressCandidates[0]
 
+if (!contractAddress) {
+  throw new Error(`Deployment execution returned successfully but no contract address was found. Do not update env, docs, or frontend. Inspect ${hash}.`)
+}
+
+let stats
+try {
+  const raw = await client.readContract({ address: contractAddress, functionName: 'get_stats', args: [], stateStatus: 'accepted' })
+  stats = typeof raw === 'string' ? JSON.parse(raw) : raw
+} catch (error) {
+  throw new Error(`Deployment returned ${EXPECTED_EXECUTION_RESULT}, but get_stats failed. Do not update env, docs, or frontend until get_stats succeeds.\nRun: node scripts/diagnose-v9-deploy.mjs ${hash}\n${errorText(error)}`)
+}
+
 console.log(stringify({
   version: 'v9',
   deployTransactionHash: hash,
   deployer: account.address,
   txExecutionHash: receipt.txExecutionHash ?? null,
   contractAddress: contractAddress ?? null,
-  addressCandidates,
+  getStats: stats,
 }))
 console.log(`Bradbury deployer: ${BRADBURY_EXPLORER}/address/${account.address}`)
 if (receipt.txExecutionHash) console.log(`Bradbury execution tx: ${BRADBURY_EXPLORER}/tx/${receipt.txExecutionHash}`)
-if (contractAddress) console.log(`Bradbury contract: ${BRADBURY_EXPLORER}/address/${contractAddress}`)
-console.log('Accepted — finalization pending. Do not treat this deployment as finalized until the explorer reports finalization.')
+console.log(`Bradbury contract: ${BRADBURY_EXPLORER}/address/${contractAddress}`)
+console.log('USABLE IN ACCEPTED STATE: execution returned successfully and get_stats succeeded. Finalization is still pending; do not describe it as finalized yet.')

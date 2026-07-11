@@ -64,6 +64,7 @@ git status --short
 ## Scripts
 
 - `npm run deploy:v9` reads `GENLAYER_DEPLOYER_PK` from the environment and deploys the v9 source. It never prints the key.
+- `npm run diagnose:v9 -- 0x…` prints compact receipt and execution-trace failure fields without dumping contract calldata.
 - `npm run smoke:v9` requires `GENLAYER_DEPLOYER_PK` and `PROOFSCORE_V9_ADDRESS`, creates a funded campaign, waits for acceptance, submits evidence, confirms accepted score state, and claims only if eligible. Challenge submission is opt-in with `SMOKE_CHALLENGE=1`.
 
-Neither script retries a write after receiving a transaction hash. The smoke script backs off on transient Bradbury read failures.
+Neither script retries a write after receiving a transaction hash. The deploy script exposes an address only after `FINISHED_WITH_RETURN` and a successful `get_stats` read. The smoke script backs off on transient Bradbury read failures.

@@ -8,7 +8,7 @@ Run the repository verification commands from the README. Fund a dedicated Bradb
 
 Set `GENLAYER_DEPLOYER_PK` securely in the current shell without writing or displaying it, then run `npm run deploy:v9`.
 
-The script prints the transaction hash and waits for `ACCEPTED`. Acceptance is not finality. Inspect the transaction and wait for `FINALIZED` before publishing the address.
+The script prints the transaction hash and waits for `ACCEPTED`. It presents an address only when execution is `FINISHED_WITH_RETURN` and `get_stats` succeeds. `FINISHED_WITH_ERROR` is a failed deployment even if consensus reports `AGREE` and the transaction later becomes `FINALIZED`; never publish its address. Acceptance is not finality, so wait for `FINALIZED` before publishing a successful deployment.
 
 Never put `GENLAYER_DEPLOYER_PK` in `.env`, `.env.local`, source, logs, screenshots, or command history shared with reviewers.
 

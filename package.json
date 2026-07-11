@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "deploy:v9": "node scripts/deploy-proofscore-v9.mjs",
+    "diagnose:v9": "node scripts/diagnose-v9-deploy.mjs",
     "smoke:v9": "node scripts/smoke-proofscore-v9.mjs"
   },
   "dependencies": {

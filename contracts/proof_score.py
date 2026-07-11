@@ -161,20 +161,22 @@ class ProofScore(gl.Contract):
     challenges: TreeMap[str, str]
     challenge_ids: TreeMap[str, str]
     leaderboard: DynArray[str]
-    campaign_count: int
-    submission_count: int
-    challenge_count: int
-    claimed_count: int
+    # Bradbury storage does not support an unsized Python `int`. String counters
+    # match the proven storage pattern used by the v8 and marketplace contracts.
+    campaign_count: str
+    submission_count: str
+    challenge_count: str
+    claimed_count: str
     total_locked_wei: str
     total_funded_wei: str
     total_claimed_wei: str
     total_refunded_wei: str
 
     def __init__(self):
-        self.campaign_count = 0
-        self.submission_count = 0
-        self.challenge_count = 0
-        self.claimed_count = 0
+        self.campaign_count = "0"
+        self.submission_count = "0"
+        self.challenge_count = "0"
+        self.claimed_count = "0"
         self.total_locked_wei = "0"
         self.total_funded_wei = "0"
         self.total_claimed_wei = "0"
@@ -210,7 +212,7 @@ class ProofScore(gl.Contract):
         assert deadline > _now(), "Deadline must be in the future."
         assert len(evidence_requirements) > 0, "Evidence requirements are required."
 
-        campaign_id = str(self.campaign_count + 1)
+        campaign_id = str(_integer(self.campaign_count) + 1)
         campaign = {
             "version": "v9",
             "campaign_id": campaign_id,
@@ -232,7 +234,7 @@ class ProofScore(gl.Contract):
         self.campaigns[campaign_id] = json.dumps(campaign)
         self.campaign_ids.append(campaign_id)
         self.submission_ids[campaign_id] = "[]"
-        self.campaign_count += 1
+        self.campaign_count = campaign_id
         self.total_locked_wei = str(_integer(self.total_locked_wei) + deposit)
         self.total_funded_wei = str(_integer(self.total_funded_wei) + deposit)
 
@@ -328,7 +330,7 @@ class ProofScore(gl.Contract):
         if eligible:
             campaign["qualified_count"] += 1
         self.campaigns[campaign_id] = json.dumps(campaign)
-        self.submission_count += 1
+        self.submission_count = str(_integer(self.submission_count) + 1)
         self._rank(submission)
 
     def _rank(self, submission: dict) -> None:
@@ -388,7 +390,7 @@ class ProofScore(gl.Contract):
             campaign["status"] = "EXHAUSTED"
         self.submissions[campaign_id + ":" + submission_id] = json.dumps(submission)
         self.campaigns[campaign_id] = json.dumps(campaign)
-        self.claimed_count += 1
+        self.claimed_count = str(_integer(self.claimed_count) + 1)
         self.total_claimed_wei = str(_integer(self.total_claimed_wei) + reward)
         self.total_locked_wei = str(max(0, _integer(self.total_locked_wei) - reward))
         _Recipient(Address(submission["builder"])).emit_transfer(value=u256(reward))
@@ -482,7 +484,7 @@ class ProofScore(gl.Contract):
         self.challenge_ids[key] = json.dumps(ids)
         self.submissions[key] = json.dumps(submission)
         self.campaigns[campaign_id] = json.dumps(campaign)
-        self.challenge_count += 1
+        self.challenge_count = str(_integer(self.challenge_count) + 1)
         self._rank(submission)
 
     @gl.public.write
