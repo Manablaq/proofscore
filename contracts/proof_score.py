@@ -14,11 +14,6 @@ class _Recipient:
         pass
 
 
-DECISIONS = ["QUALIFIED", "NOT_QUALIFIED", "INVALID"]
-CONFIDENCES = ["HIGH", "MEDIUM", "LOW"]
-VERDICTS = ["UPHOLD", "REDUCE_SCORE", "INCREASE_SCORE", "INVALIDATE", "NEEDS_MORE_EVIDENCE"]
-
-
 def _now() -> int:
     """Return deterministic transaction time from GenLayer message metadata."""
     try:
@@ -48,23 +43,10 @@ def _now() -> int:
 
 def _clean(value, limit: int = 1200) -> str:
     try:
-        text = str(value).replace("\r", " ").replace("\x00", " ").strip()
+        text = str(value).replace("\r", " ").replace("\n", " ").replace("\x00", " ").strip()
         return text[:limit]
     except:
         return ""
-
-
-def _safe_json(raw: str) -> dict:
-    try:
-        text = raw.strip()
-        if text.startswith("```"):
-            text = text.split("```", 2)[1]
-            if text.lstrip().startswith("json"):
-                text = text.lstrip()[4:]
-        parsed = json.loads(text.strip())
-        return parsed if isinstance(parsed, dict) else {}
-    except:
-        return {}
 
 
 def _integer(value, default: int = 0) -> int:
@@ -74,82 +56,91 @@ def _integer(value, default: int = 0) -> int:
         return default
 
 
-def _strings(value, limit: int = 12) -> list:
-    if not isinstance(value, list):
-        return []
-    return [_clean(item, 360) for item in value[:limit] if _clean(item, 360)]
+def _canonical_json(value) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def _score_result(raw: str) -> dict:
-    data = _safe_json(raw)
-    dimensions_raw = data.get("dimensions", {})
-    if not isinstance(dimensions_raw, dict):
-        dimensions_raw = {}
-    dimensions = {}
-    for key in ["build", "voice", "craft", "network", "consistency"]:
-        dimensions[key] = max(0, min(20, _integer(dimensions_raw.get(key, 0))))
-    score = max(0, min(100, _integer(data.get("score", sum(dimensions.values())))))
-    decision = _clean(data.get("decision", "INVALID"), 24).upper()
-    confidence = _clean(data.get("confidence", "LOW"), 12).upper()
-    if decision not in DECISIONS:
-        decision = "INVALID"
-    if confidence not in CONFIDENCES:
-        confidence = "LOW"
-    if not _clean(data.get("reasoning", ""), 2000):
-        decision = "INVALID"
-        confidence = "LOW"
-    if not _strings(data.get("accepted_sources", [])):
-        decision = "INVALID"
-        score = min(score, 39)
+def _optional_source(value: str) -> str:
+    value = _clean(value, 500)
+    if not value or value.lower() == "none":
+        return ""
+    return value
+
+
+def _web_source(value: str) -> str:
+    value = _optional_source(value)
+    if not value:
+        return ""
+    lowered = value.lower()
+    valid_scheme = lowered.startswith("https://") or lowered.startswith("http://")
+    separator = lowered.find("://")
+    host_and_path = value[separator + 3:]
+    assert valid_scheme and separator >= 0 and host_and_path and host_and_path[0] not in "/?#" and " " not in value, "Evidence must be a valid HTTP(S) URL."
+    return value
+
+
+def _github_source(value: str) -> str:
+    value = _optional_source(value)
+    if not value:
+        return ""
+    prefix = "https://github.com/"
+    path = value[len(prefix):].split("?", 1)[0].split("#", 1)[0].strip("/")
+    assert value.lower().startswith(prefix) and path, "GitHub evidence must use https://github.com/..."
+    assert " " not in value, "GitHub evidence must not contain spaces."
+    return value
+
+
+def _x_source(value: str) -> str:
+    value = _optional_source(value)
+    if not value:
+        return ""
+    lowered = value.lower()
+    prefix = "https://x.com/" if lowered.startswith("https://x.com/") else "https://twitter.com/"
+    valid = lowered.startswith("https://x.com/") or lowered.startswith("https://twitter.com/")
+    path = value[len(prefix):].split("?", 1)[0].split("#", 1)[0].strip("/")
+    assert valid and path, "X evidence must use https://x.com/... or https://twitter.com/..."
+    assert " " not in value, "X evidence must not contain spaces."
+    return value
+
+
+def _deterministic_score(campaign: dict, evidence: dict, invalidated: list = []) -> dict:
+    source_fields = ["github_url", "x_url", "portfolio_url", "additional_evidence_url"]
+    source_labels = ["github", "x", "portfolio", "additional"]
+    accepted = [evidence[source_fields[i]] for i in range(len(source_fields)) if evidence[source_fields[i]] and source_labels[i] not in invalidated]
+    rejected = [evidence[source_fields[i]] for i in range(len(source_fields)) if evidence[source_fields[i]] and source_labels[i] in invalidated]
+    notes_length = len(evidence["notes"])
+    notes_score = 20 if notes_length >= 40 else (10 if notes_length >= 10 else 0)
+    dimensions = {
+        "github": 25 if evidence["github_url"] and "github" not in invalidated else 0,
+        "x": 15 if evidence["x_url"] and "x" not in invalidated else 0,
+        "portfolio": 20 if evidence["portfolio_url"] and "portfolio" not in invalidated else 0,
+        "additional": 20 if evidence["additional_evidence_url"] and "additional" not in invalidated else 0,
+        "notes": notes_score,
+    }
+    score = sum(dimensions.values())
+    requirements = _clean(campaign["evidence_requirements"], 1600)
+    required = [label for label in source_labels if "[requires:" + label + "]" in requirements]
+    present = {source_labels[i]: bool(evidence[source_fields[i]]) and source_labels[i] not in invalidated for i in range(len(source_fields))}
+    missing = [label for label in required if not present[label]]
+    has_strong_source = present["github"] or present["portfolio"]
+    threshold = _integer(campaign["threshold_score"])
+    forced_invalid = "duplicate" in invalidated or "irrelevant" in invalidated
+    decision = "INVALID" if forced_invalid else ("QUALIFIED" if score >= threshold and not missing and has_strong_source else "NOT_QUALIFIED")
+    risks = ["INVALIDATED_" + label.upper() for label in invalidated]
+    risks += ["MISSING_REQUIRED_" + label.upper() for label in missing]
+    if not has_strong_source:
+        risks.append("MISSING_STRONG_SOURCE")
     return {
         "score": score,
         "decision": decision,
-        "confidence": confidence,
+        "confidence": "DETERMINISTIC",
         "dimensions": dimensions,
-        "evidence_summary": _clean(data.get("evidence_summary", "No verifiable evidence summary returned."), 1600),
-        "accepted_sources": _strings(data.get("accepted_sources", [])),
-        "rejected_sources": _strings(data.get("rejected_sources", [])),
-        "risk_flags": _strings(data.get("risk_flags", [])),
-        "reasoning": _clean(data.get("reasoning", "Validator output was incomplete."), 2000),
-    }
-
-
-def _challenge_result(raw: str, previous_score: int, previous_decision: str) -> dict:
-    data = _safe_json(raw)
-    verdict = _clean(data.get("verdict", "NEEDS_MORE_EVIDENCE"), 32).upper()
-    decision = _clean(data.get("revised_decision", previous_decision), 24).upper()
-    confidence = _clean(data.get("confidence", "LOW"), 12).upper()
-    score = max(0, min(100, _integer(data.get("revised_score", previous_score), previous_score)))
-    if verdict not in VERDICTS:
-        verdict = "NEEDS_MORE_EVIDENCE"
-    if decision not in DECISIONS:
-        decision = previous_decision if previous_decision in DECISIONS else "INVALID"
-    if confidence not in CONFIDENCES:
-        confidence = "LOW"
-    if verdict in ["UPHOLD", "NEEDS_MORE_EVIDENCE"]:
-        score = previous_score
-        decision = previous_decision
-    elif verdict == "REDUCE_SCORE":
-        score = min(score, previous_score)
-    elif verdict == "INCREASE_SCORE":
-        score = max(score, previous_score)
-    if verdict == "INVALIDATE":
-        decision = "INVALID"
-        score = min(score, 39)
-    if not _clean(data.get("reasoning", ""), 2000):
-        verdict = "NEEDS_MORE_EVIDENCE"
-        score = previous_score
-        decision = previous_decision
-        confidence = "LOW"
-    return {
-        "verdict": verdict,
-        "revised_score": score,
-        "revised_decision": decision,
-        "confidence": confidence,
-        "reasoning": _clean(data.get("reasoning", "Challenge output was incomplete; prior result retained."), 2000),
-        "accepted_challenge_sources": _strings(data.get("accepted_challenge_sources", [])),
-        "rejected_challenge_sources": _strings(data.get("rejected_challenge_sources", [])),
-        "risk_flags": _strings(data.get("risk_flags", [])),
+        "evidence_summary": "Canonical source-identifier rubric; URLs are identifiers, not ownership proof.",
+        "accepted_sources": accepted,
+        "rejected_sources": rejected,
+        "risk_flags": risks,
+        "reasoning": "Score uses validated category weights and bounded notes. Qualification requires GitHub or portfolio, the campaign threshold, and every exact [requires:category] token.",
+        "scoring_method": "CANONICAL_SOURCE_RUBRIC_V1",
     }
 
 
@@ -160,6 +151,7 @@ class ProofScore(gl.Contract):
     submission_ids: TreeMap[str, str]
     challenges: TreeMap[str, str]
     challenge_ids: TreeMap[str, str]
+    builder_submissions: TreeMap[str, str]
     leaderboard: DynArray[str]
     # Bradbury storage does not support an unsized Python `int`. String counters
     # match the proven storage pattern used by the v8 and marketplace contracts.
@@ -231,7 +223,7 @@ class ProofScore(gl.Contract):
             "submissions_count": 0,
             "qualified_count": 0,
         }
-        self.campaigns[campaign_id] = json.dumps(campaign)
+        self.campaigns[campaign_id] = _canonical_json(campaign)
         self.campaign_ids.append(campaign_id)
         self.submission_ids[campaign_id] = "[]"
         self.campaign_count = campaign_id
@@ -253,48 +245,21 @@ class ProofScore(gl.Contract):
         assert campaign["status"] == "OPEN", "Campaign is not open."
         assert _now() <= _integer(campaign["deadline"]), "Campaign deadline has passed."
         assert 2 <= len(handle) <= 80, "Handle must be 2-80 characters."
-        sources = [url for url in [github_url, x_url, portfolio_url, additional_evidence_url] if url and url != "none"]
-        assert len(sources) > 0, "Provide at least one evidence URL."
         submitter = str(gl.message.sender_address)
+        builder_key = campaign_id + ":" + submitter
+        assert self.builder_submissions.get(builder_key, None) is None, "Builder already submitted to this campaign."
 
-        # Metadata-only resolver: validators judge the submitted source identifiers,
-        # notes, and requirements. No claim is made that a URL proves ownership.
+        # Canonical metadata only. No claim is made that a URL proves ownership.
         evidence_record = {
             "handle": _clean(handle, 80),
-            "github_url": _clean(github_url, 500),
-            "x_url": _clean(x_url, 500),
-            "portfolio_url": _clean(portfolio_url, 500),
-            "additional_evidence_url": _clean(additional_evidence_url, 500),
+            "github_url": _github_source(github_url),
+            "x_url": _x_source(x_url),
+            "portfolio_url": _web_source(portfolio_url),
+            "additional_evidence_url": _web_source(additional_evidence_url),
             "notes": _clean(notes, 1800),
-            "source_identifiers": sources,
         }
-
-        def get_input() -> str:
-            return json.dumps({
-                "campaign_title": campaign["title"],
-                "campaign_description": campaign["description"],
-                "threshold_score": campaign["threshold_score"],
-                "evidence_requirements": campaign["evidence_requirements"],
-                "submitted_evidence": evidence_record,
-            })
-
-        raw = gl.eq_principle.prompt_non_comparative(
-            get_input,
-            task=(
-                "Assess builder evidence for a bounty. Treat URLs as source identifiers and notes as claims, not identity proof. "
-                "Return strict JSON only with score (0-100), decision (QUALIFIED, NOT_QUALIFIED, or INVALID), "
-                "confidence (HIGH, MEDIUM, or LOW), dimensions with build/voice/craft/network/consistency each 0-20, "
-                "evidence_summary, accepted_sources array, rejected_sources array, risk_flags array, and reasoning. "
-                "The five dimensions should sum to score. QUALIFIED requires credible source-backed evidence matching the campaign. "
-                "Use INVALID for malformed, irrelevant, or unverifiable identifiers; use NOT_QUALIFIED for valid but weak evidence."
-            ),
-            criteria=(
-                "Accept only one valid JSON object with every requested field and allowed enum. Scores must be integers in range, "
-                "dimension totals must materially agree with score, reasoning must connect accepted source identifiers to the campaign "
-                "requirements, and uncertainty or inaccessible content must lower confidence and score. Never accept claims of wallet/profile ownership proof."
-            ),
-        )
-        result = _score_result(raw)
+        assert any([evidence_record["github_url"], evidence_record["x_url"], evidence_record["portfolio_url"], evidence_record["additional_evidence_url"]]), "Provide at least one valid HTTP(S) evidence URL."
+        result = _deterministic_score(campaign, evidence_record)
         eligible = result["decision"] == "QUALIFIED" and result["score"] >= _integer(campaign["threshold_score"])
         submission_id = str(campaign["submissions_count"] + 1)
         submission = {
@@ -319,22 +284,24 @@ class ProofScore(gl.Contract):
             "challenge_count": 0,
             "last_challenged_at": 0,
             "revision_count": 0,
+            "invalidated_categories": [],
         }
         key = campaign_id + ":" + submission_id
-        self.submissions[key] = json.dumps(submission)
+        self.submissions[key] = _canonical_json(submission)
         ids = json.loads(self.submission_ids.get(campaign_id, "[]"))
         ids.append(submission_id)
-        self.submission_ids[campaign_id] = json.dumps(ids)
+        self.submission_ids[campaign_id] = _canonical_json(ids)
         self.challenge_ids[key] = "[]"
+        self.builder_submissions[builder_key] = submission_id
         campaign["submissions_count"] += 1
         if eligible:
             campaign["qualified_count"] += 1
-        self.campaigns[campaign_id] = json.dumps(campaign)
+        self.campaigns[campaign_id] = _canonical_json(campaign)
         self.submission_count = str(_integer(self.submission_count) + 1)
         self._rank(submission)
 
     def _rank(self, submission: dict) -> None:
-        entry = json.dumps({
+        entry = _canonical_json({
             "campaign_id": submission["campaign_id"],
             "submission_id": submission["submission_id"],
             "builder": submission["builder"],
@@ -388,8 +355,8 @@ class ProofScore(gl.Contract):
         campaign["remaining_pool"] = str(remaining - reward)
         if remaining - reward < reward:
             campaign["status"] = "EXHAUSTED"
-        self.submissions[campaign_id + ":" + submission_id] = json.dumps(submission)
-        self.campaigns[campaign_id] = json.dumps(campaign)
+        self.submissions[campaign_id + ":" + submission_id] = _canonical_json(submission)
+        self.campaigns[campaign_id] = _canonical_json(campaign)
         self.claimed_count = str(_integer(self.claimed_count) + 1)
         self.total_claimed_wei = str(_integer(self.total_claimed_wei) + reward)
         self.total_locked_wei = str(max(0, _integer(self.total_locked_wei) - reward))
@@ -399,58 +366,61 @@ class ProofScore(gl.Contract):
     def challenge_score(self, campaign_id: str, submission_id: str, challenge_url: str, reason: str) -> None:
         campaign = self._campaign(campaign_id)
         submission = self._submission(campaign_id, submission_id)
-        assert len(challenge_url) > 5, "Challenge evidence URL is required."
-        assert len(reason) >= 10, "Challenge reason must be at least 10 characters."
+        canonical_challenge_url = _web_source(challenge_url)
+        assert canonical_challenge_url, "Challenge evidence must be a valid HTTP(S) URL."
+        canonical_reason = _clean(reason, 1600)
+        assert len(canonical_reason) >= 10, "Challenge reason must be at least 10 characters."
         challenger = str(gl.message.sender_address)
         previous_score = _integer(submission["score"])
         previous_decision = submission["decision"]
 
-        original = {
-            "handle": submission["handle"],
-            "github_url": submission["github_url"],
-            "x_url": submission["x_url"],
-            "portfolio_url": submission["portfolio_url"],
-            "additional_evidence_url": submission["additional_evidence_url"],
-            "notes": submission["notes"],
-            "accepted_sources": submission["accepted_sources"],
-            "rejected_sources": submission["rejected_sources"],
-            "score": previous_score,
-            "decision": previous_decision,
-            "reasoning": submission["reasoning"],
-        }
-
-        def get_input() -> str:
-            return json.dumps({
-                "campaign_requirements": campaign["evidence_requirements"],
-                "threshold_score": campaign["threshold_score"],
-                "original_evidence_and_accepted_assessment": original,
-                "challenge_evidence": {"challenge_url": challenge_url, "reason": reason},
-                "already_claimed": submission["claimed"],
-            })
-
-        raw = gl.eq_principle.prompt_non_comparative(
-            get_input,
-            task=(
-                "Compare the complete original evidence record and its accepted assessment against the challenge source identifier and reason. "
-                "Return strict JSON only with verdict (UPHOLD, REDUCE_SCORE, INCREASE_SCORE, INVALIDATE, or NEEDS_MORE_EVIDENCE), "
-                "revised_score 0-100, revised_decision (QUALIFIED, NOT_QUALIFIED, or INVALID), confidence, reasoning, "
-                "accepted_challenge_sources array, rejected_challenge_sources array, and risk_flags array. "
-                "Do not assume URL ownership or invent page contents. A challenge may revise eligibility but cannot claw back an already scheduled payout."
-            ),
-            criteria=(
-                "Accept only valid JSON with allowed enums and bounded score. Reasoning must explicitly compare original evidence with counter-evidence, "
-                "explain source acceptance/rejection, preserve the prior result when counter-evidence is insufficient, and avoid identity-proof claims."
-            ),
-        )
-        outcome = _challenge_result(raw, previous_score, previous_decision)
         was_qualified = submission["eligible_to_claim"]
-        submission["score"] = outcome["revised_score"]
-        submission["decision"] = outcome["revised_decision"]
-        if not submission["claimed"]:
-            submission["eligible_to_claim"] = (
-                outcome["revised_decision"] == "QUALIFIED"
-                and outcome["revised_score"] >= _integer(campaign["threshold_score"])
-            )
+        tags = [label for label in ["github", "x", "portfolio", "additional", "duplicate", "irrelevant"] if "[invalid:" + label + "]" in canonical_reason]
+        creator_can_affect = challenger == campaign["creator"] and not submission["claimed"] and len(tags) > 0
+        invalidated = submission.get("invalidated_categories", [])
+        if not isinstance(invalidated, list):
+            invalidated = []
+        if creator_can_affect:
+            for label in tags:
+                if label not in invalidated:
+                    invalidated.append(label)
+            evidence = {
+                "github_url": submission["github_url"],
+                "x_url": submission["x_url"],
+                "portfolio_url": submission["portfolio_url"],
+                "additional_evidence_url": submission["additional_evidence_url"],
+                "notes": submission["notes"],
+            }
+            result = _deterministic_score(campaign, evidence, invalidated)
+            submission.update(result)
+            submission["invalidated_categories"] = invalidated
+            submission["eligible_to_claim"] = result["decision"] == "QUALIFIED" and result["score"] >= _integer(campaign["threshold_score"])
+
+        revised_score = _integer(submission["score"])
+        revised_decision = submission["decision"]
+        if submission["claimed"]:
+            verdict = "NEEDS_MORE_EVIDENCE"
+            settlement_effect = "RECORDED_NO_CLAWBACK"
+            deterministic_reasoning = "Post-claim challenge recorded without changing settled payout state."
+        elif creator_can_affect:
+            verdict = "INVALIDATE" if revised_decision == "INVALID" else ("REDUCE_SCORE" if revised_score < previous_score else "UPHOLD")
+            settlement_effect = "ELIGIBILITY_RECOMPUTED"
+            deterministic_reasoning = "Campaign creator challenge applied exact invalidation tags and recomputed canonical score eligibility."
+        else:
+            verdict = "NEEDS_MORE_EVIDENCE"
+            settlement_effect = "RECORDED_NO_SCORE_CHANGE"
+            deterministic_reasoning = "Challenge recorded without score change; only a pre-claim campaign creator challenge with exact tags can affect eligibility."
+
+        outcome = {
+            "verdict": verdict,
+            "revised_score": revised_score,
+            "revised_decision": revised_decision,
+            "confidence": "DETERMINISTIC",
+            "reasoning": deterministic_reasoning,
+            "accepted_challenge_sources": [canonical_challenge_url],
+            "rejected_challenge_sources": [],
+            "risk_flags": ["APPLIED_" + label.upper() for label in tags] if creator_can_affect else ["MANUAL_REVIEW_RECOMMENDED"],
+        }
         submission["challenge_count"] += 1
         submission["last_challenged_at"] = _now()
         if outcome["revised_score"] != previous_score or outcome["revised_decision"] != previous_decision:
@@ -468,22 +438,24 @@ class ProofScore(gl.Contract):
             "submission_id": submission_id,
             "challenge_id": challenge_id,
             "challenger": challenger,
-            "challenge_url": _clean(challenge_url, 500),
-            "reason": _clean(reason, 1600),
+            "challenge_url": canonical_challenge_url,
+            "reason": canonical_reason,
+            "prior_score": previous_score,
+            "prior_decision": previous_decision,
             "previous_score": previous_score,
             "previous_decision": previous_decision,
             **outcome,
             "claimed_before_challenge": submission["claimed"],
-            "settlement_effect": "RECORDED_NO_CLAWBACK" if submission["claimed"] else "ELIGIBILITY_RECOMPUTED",
+            "settlement_effect": settlement_effect,
             "created_at": _now(),
         }
         key = campaign_id + ":" + submission_id
-        self.challenges[key + ":" + challenge_id] = json.dumps(challenge)
+        self.challenges[key + ":" + challenge_id] = _canonical_json(challenge)
         ids = json.loads(self.challenge_ids.get(key, "[]"))
         ids.append(challenge_id)
-        self.challenge_ids[key] = json.dumps(ids)
-        self.submissions[key] = json.dumps(submission)
-        self.campaigns[campaign_id] = json.dumps(campaign)
+        self.challenge_ids[key] = _canonical_json(ids)
+        self.submissions[key] = _canonical_json(submission)
+        self.campaigns[campaign_id] = _canonical_json(campaign)
         self.challenge_count = str(_integer(self.challenge_count) + 1)
         self._rank(submission)
 
@@ -498,7 +470,7 @@ class ProofScore(gl.Contract):
         campaign["status"] = "CLOSED"
         campaign["closed_at"] = _now()
         campaign["refund_status"] = "NONE" if refund == 0 else "SCHEDULED_FOR_FINALIZATION"
-        self.campaigns[campaign_id] = json.dumps(campaign)
+        self.campaigns[campaign_id] = _canonical_json(campaign)
         if refund > 0:
             self.total_locked_wei = str(max(0, _integer(self.total_locked_wei) - refund))
             self.total_refunded_wei = str(_integer(self.total_refunded_wei) + refund)
@@ -507,7 +479,7 @@ class ProofScore(gl.Contract):
     @gl.public.view
     def get_campaign(self, campaign_id: str) -> str:
         raw = self.campaigns.get(campaign_id, None)
-        return raw if raw is not None else json.dumps({"exists": False, "campaign_id": campaign_id})
+        return raw if raw is not None else _canonical_json({"exists": False, "campaign_id": campaign_id})
 
     @gl.public.view
     def list_campaigns(self) -> str:
@@ -516,12 +488,12 @@ class ProofScore(gl.Contract):
             raw = self.campaigns.get(campaign_id, None)
             if raw is not None:
                 result.append(json.loads(raw))
-        return json.dumps(result)
+        return _canonical_json(result)
 
     @gl.public.view
     def get_submission(self, campaign_id: str, submission_id: str) -> str:
         raw = self.submissions.get(campaign_id + ":" + submission_id, None)
-        return raw if raw is not None else json.dumps({"exists": False, "campaign_id": campaign_id, "submission_id": submission_id})
+        return raw if raw is not None else _canonical_json({"exists": False, "campaign_id": campaign_id, "submission_id": submission_id})
 
     @gl.public.view
     def list_submissions(self, campaign_id: str) -> str:
@@ -530,12 +502,12 @@ class ProofScore(gl.Contract):
             raw = self.submissions.get(campaign_id + ":" + submission_id, None)
             if raw is not None:
                 result.append(json.loads(raw))
-        return json.dumps(result)
+        return _canonical_json(result)
 
     @gl.public.view
     def get_challenge(self, campaign_id: str, submission_id: str, challenge_id: str) -> str:
         raw = self.challenges.get(campaign_id + ":" + submission_id + ":" + challenge_id, None)
-        return raw if raw is not None else json.dumps({"exists": False, "challenge_id": challenge_id})
+        return raw if raw is not None else _canonical_json({"exists": False, "challenge_id": challenge_id})
 
     @gl.public.view
     def list_challenges(self, campaign_id: str, submission_id: str) -> str:
@@ -545,11 +517,11 @@ class ProofScore(gl.Contract):
             raw = self.challenges.get(key + ":" + challenge_id, None)
             if raw is not None:
                 result.append(json.loads(raw))
-        return json.dumps(result)
+        return _canonical_json(result)
 
     @gl.public.view
     def get_stats(self) -> str:
-        return json.dumps({
+        return _canonical_json({
             "contract_version": "v9",
             "campaigns": self.campaign_count,
             "submissions": self.submission_count,
@@ -563,8 +535,8 @@ class ProofScore(gl.Contract):
 
     @gl.public.view
     def get_leaderboard(self) -> str:
-        return json.dumps([json.loads(item) for item in self.leaderboard])
+        return _canonical_json([json.loads(item) for item in self.leaderboard])
 
     @gl.public.view
     def list_top_scores(self) -> str:
-        return json.dumps([json.loads(item) for item in self.leaderboard])
+        return _canonical_json([json.loads(item) for item in self.leaderboard])

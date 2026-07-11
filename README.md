@@ -1,6 +1,6 @@
 # ProofScore v9
 
-ProofScore is a GenLayer-native, evidence-settled builder bounty protocol: **reputation that settles rewards**. A sponsor locks a GEN reward pool and sets a minimum score. Builders submit public evidence identifiers, validators produce an accepted structured assessment, and only a qualifying score unlocks a reward claim. Counter-evidence can challenge and revise eligibility before claim.
+ProofScore is a GenLayer-native, evidence-settled builder bounty protocol: **reputation that settles rewards**. A sponsor locks a GEN reward pool and sets a minimum score. Builders submit public evidence identifiers, the contract computes a canonical score, and only an accepted qualifying submission unlocks a reward claim. Counter-evidence challenges remain in the on-chain audit trail without persisting validator-variable prose.
 
 This is an evidence-backed reputation assessment, not identity verification. A submitted profile URL does not prove that a wallet owns the profile.
 
@@ -8,9 +8,15 @@ This is an evidence-backed reputation assessment, not identity verification. A s
 
 1. **Campaign:** a sponsor creates a payable campaign and deposits its reward pool in wei.
 2. **Evidence:** a builder submits source URLs and contextual notes.
-3. **Validator score:** GenLayer validators accept a 0–100 score, decision, confidence, five dimensions, source record, risks, and reasoning.
+3. **Canonical score:** validated GitHub, X/Twitter, portfolio, additional evidence, and bounded notes receive fixed weights. Qualification requires GitHub or portfolio plus the threshold and every exact requirement token.
 4. **Claim reward:** `QUALIFIED` plus `score >= threshold` makes the builder eligible. `claim_reward` deducts the fixed reward from escrow and schedules the external GEN transfer for finalization.
-5. **Challenge:** a challenger submits counter-evidence. Validators compare it with the original evidence and accepted reasoning, then recompute eligibility. A post-claim challenge is recorded but does not pretend to claw funds back.
+5. **Challenge:** anyone can record bounded counter-evidence. Before claim, only the campaign creator can apply exact invalidation tags that deterministically recompute score and eligibility. Post-claim challenges cannot claw funds back.
+
+One builder wallet can submit only once per campaign. GitHub evidence must use `https://github.com/...`; X evidence must use `https://x.com/...` or `https://twitter.com/...`.
+
+Campaign requirements use only these exact lowercase tokens: `[requires:github]`, `[requires:x]`, `[requires:portfolio]`, and `[requires:additional]`. Other requirement prose remains descriptive and does not silently create mandatory categories.
+
+Score-affecting creator challenges use only these exact lowercase tags: `[invalid:github]`, `[invalid:x]`, `[invalid:portfolio]`, `[invalid:additional]`, `[invalid:duplicate]`, and `[invalid:irrelevant]`. Category tags remove their points; duplicate and irrelevant tags force `INVALID`.
 
 See [Architecture](docs/ARCHITECTURE.md), [Deployment](docs/DEPLOYMENT.md), and [Review response](docs/REVIEW_RESPONSE.md).
 
@@ -65,6 +71,6 @@ git status --short
 
 - `npm run deploy:v9` reads `GENLAYER_DEPLOYER_PK` from the environment and deploys the v9 source. It never prints the key.
 - `npm run diagnose:v9 -- 0x…` prints compact receipt and execution-trace failure fields without dumping contract calldata.
-- `npm run smoke:v9` requires `GENLAYER_DEPLOYER_PK` and `PROOFSCORE_V9_ADDRESS`, creates a funded campaign, waits for acceptance, submits evidence, confirms accepted score state, and claims only if eligible. Challenge submission is opt-in with `SMOKE_CHALLENGE=1`.
+- `npm run smoke:v9` requires `GENLAYER_DEPLOYER_PK` and `PROOFSCORE_V9_ADDRESS`, safely finds or creates a funded campaign, waits for accepted-state visibility, submits evidence, confirms canonical score state, and claims only if eligible. Set `SMOKE_CAMPAIGN_ID` to continue exactly one existing campaign and disable creation. Challenge submission is opt-in with `SMOKE_CHALLENGE=1`.
 
-Neither script retries a write after receiving a transaction hash. The deploy script exposes an address only after `FINISHED_WITH_RETURN` and a successful `get_stats` read. The smoke script backs off on transient Bradbury read failures.
+Neither script retries a write after receiving a transaction hash. The deploy script exposes an address only after `FINISHED_WITH_RETURN` and a successful `get_stats` read. The smoke script backs off on transient Bradbury reads, polls all campaign views after acceptance, reuses one matching campaign on continuation, and fails explicitly on `UNDETERMINED` / `NO_MAJORITY`.

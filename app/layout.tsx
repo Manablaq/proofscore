@@ -7,7 +7,7 @@ const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'ProofScore — Reputation That Settles Rewards',
-  description: 'A GenLayer-native evidence-settled builder bounty protocol where contestable validator scores control campaign eligibility and reward release.',
+  description: 'A GenLayer-native evidence-settled builder bounty protocol where consensus-safe canonical scores control campaign eligibility and reward release.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -4,7 +4,7 @@ import { testnetBradbury } from 'genlayer-js/chains'
 const hash = process.argv[2]
 
 if (!/^0x[0-9a-fA-F]{64}$/.test(hash ?? '')) {
-  console.error('Usage: node scripts/diagnose-v9-deploy.mjs 0x<64-byte-tx-hash>')
+  console.error('Usage: node scripts/diagnose-v9-deploy.mjs 0x<deploy-or-call-transaction-hash>')
   process.exit(1)
 }
 
@@ -72,7 +72,7 @@ const rounds = compactRounds(transaction)
 const lastRound = compactLastRound(transaction.lastRound)
 
 console.log(JSON.stringify({
-  deployTransactionHash: hash,
+  transactionHash: hash,
   status_name: transaction.statusName ?? transaction.status_name ?? null,
   resultName: transaction.resultName ?? null,
   txExecutionResultName: transaction.txExecutionResultName ?? null,
