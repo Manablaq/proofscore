@@ -36,6 +36,16 @@ type ContractStats = {
 type TxState = { phase: 'idle' | 'submitted' | 'accepted' | 'finalized' | 'failed'; hash?: string; detail?: string }
 
 const chainHex = `0x${BRADBURY_CHAIN_ID.toString(16)}`
+const MIN_DEADLINE_AHEAD_MS = 10 * 60_000
+const DEFAULT_DEADLINE_AHEAD_MS = 24 * 60 * 60_000
+
+function formatLocalDateTime(date: Date, roundUp = false) {
+  if (!Number.isFinite(date.getTime())) return ''
+  const value = new Date(date)
+  if (roundUp && (value.getSeconds() > 0 || value.getMilliseconds() > 0)) value.setMinutes(value.getMinutes() + 1)
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`
+}
 
 function asArray<T>(value: unknown): T[] {
   if (Array.isArray(value)) return value as T[]
@@ -102,19 +112,23 @@ async function submitWrite(address: string, method: string, args: unknown[], val
       if (!receipt) continue
       const status = String(receipt.statusName ?? receipt.status ?? '').toUpperCase()
       const execution = String(receipt.txExecutionResultName ?? '').toUpperCase()
-      if (execution.includes('ERROR') || status.includes('ERROR') || status.includes('UNDETERMINED')) {
-        update?.({ phase: 'failed', hash, detail: `${status || 'FAILED'}${execution ? ` / ${execution}` : ''}` })
+      const result = String(receipt.resultName ?? receipt.result ?? '').toUpperCase()
+      const receiptError = typeof receipt.error === 'string' ? receipt.error : typeof receipt.data?.error === 'string' ? receipt.data.error : ''
+      const failure = [status, execution, result, receiptError.toUpperCase()].some(value => /FINISHED_WITH_ERROR|USERERROR|VMERROR|UNDETERMINED|NO_MAJORITY|DETERMINISTIC_VIOLATION|TIMEOUT|CANCELED|FAILURE/.test(value))
+      if (failure) {
+        const outcome = [status, result, execution].filter(Boolean).join(' / ') || 'Transaction failed'
+        update?.({ phase: 'failed', hash, detail: receiptError ? `${outcome}: ${receiptError}` : outcome.replaceAll('_', ' ') })
         return false
       }
-      if (status.includes('FINALIZED')) {
+      if (execution === 'FINISHED_WITH_RETURN' && status.includes('FINALIZED')) {
         update?.({ phase: 'finalized', hash, detail: 'Finalized.' }); return true
       }
-      if (status.includes('ACCEPTED')) {
-        update?.({ phase: 'accepted', hash, detail: 'Accepted — finalization pending. Accepted state can now be refreshed.' }); return true
+      if (execution === 'FINISHED_WITH_RETURN' && status.includes('ACCEPTED')) {
+        update?.({ phase: 'accepted', hash, detail: 'Accepted with successful execution — finalization pending. Accepted state can now be refreshed.' }); return true
       }
     } catch {}
   }
-  update?.({ phase: 'failed', hash, detail: 'Receipt polling timed out. Inspect the transaction before retrying.' })
+  update?.({ phase: 'submitted', hash, detail: 'Timed out waiting for the receipt. The transaction outcome is unknown; inspect the transaction hash before retrying.' })
   return false
 }
 
@@ -160,6 +174,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [error, setError] = useState('')
+  const [deadlineError, setDeadlineError] = useState('')
   const [tx, setTx] = useState<TxState>({ phase: 'idle' })
   const selected = campaigns.find(campaign => campaign.campaign_id === selectedId)
   const isV9Live = PROOFSCORE_IS_CONFIGURED && String(stats?.contract_version).toLowerCase() === 'v9'
@@ -211,11 +226,40 @@ export default function Home() {
   async function createCampaign(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
-    const reward = parseEther(String(form.get('reward')))
-    const slots = Math.max(1, Number(form.get('slots')))
-    const deadline = Math.floor(new Date(String(form.get('deadline'))).getTime() / 1000)
-    const ok = await runWrite('create_campaign', [String(form.get('title')), String(form.get('description')), Number(form.get('threshold')), reward.toString(), deadline, String(form.get('requirements'))], reward * BigInt(slots))
-    if (ok) event.currentTarget.reset()
+    const title = String(form.get('title') ?? '').trim()
+    const description = String(form.get('description') ?? '').trim()
+    const threshold = Number(form.get('threshold'))
+    const rewardInput = String(form.get('reward') ?? '').trim()
+    const slots = Number(form.get('slots'))
+    const deadlineInput = String(form.get('deadline') ?? '').trim()
+    const requirements = String(form.get('requirements') ?? '').trim()
+    const deadlineMs = deadlineInput ? new Date(deadlineInput).getTime() : Number.NaN
+
+    setDeadlineError('')
+    if (!deadlineInput || !Number.isFinite(deadlineMs) || deadlineMs < Date.now() + MIN_DEADLINE_AHEAD_MS) {
+      const message = 'Choose a deadline at least 10 minutes in the future.'
+      setDeadlineError(message); setError(message); return
+    }
+    if (title.length < 3 || title.length > 100) { setError('Campaign title must be between 3 and 100 characters.'); return }
+    if (!description) { setError('Enter a campaign description.'); return }
+    if (!Number.isFinite(threshold) || threshold < 1 || threshold > 100) { setError('ProofScore threshold must be between 1 and 100.'); return }
+    if (!Number.isSafeInteger(slots) || slots <= 0) { setError('Funded reward slots must be a positive whole number.'); return }
+    if (!requirements) { setError('Enter evidence requirements.'); return }
+
+    let reward: bigint
+    let totalValue: bigint
+    try {
+      reward = parseEther(rewardInput)
+      if (reward <= BigInt(0)) throw new Error('Reward must be positive.')
+      totalValue = reward * BigInt(slots)
+      if (totalValue <= BigInt(0) || totalValue / BigInt(slots) !== reward) throw new Error('Invalid campaign funding total.')
+    } catch {
+      setError('Enter a valid positive reward amount.'); return
+    }
+
+    const deadline = Math.floor(deadlineMs / 1000)
+    const ok = await runWrite('create_campaign', [title, description, threshold, reward.toString(), deadline, requirements], totalValue)
+    if (ok) { event.currentTarget.reset(); setDeadlineError('') }
   }
 
   async function submitProfile(event: FormEvent<HTMLFormElement>) {
@@ -298,7 +342,7 @@ export default function Home() {
       </div>
     </section>}
 
-    <section className="section create" id="create"><div><span className="eyebrow">SPONSOR A SETTLEMENT</span><h2>Create and fund a campaign</h2><p>The deposited GEN becomes the campaign reward pool. Every accepted score at or above your threshold unlocks one fixed claim, while creator counter-evidence can revise eligibility before claim.</p></div><form className="glass-form" onSubmit={createCampaign}><div className="form-grid"><label>Campaign title<input required name="title" minLength={3} maxLength={100} /></label><label>Minimum ProofScore<input required name="threshold" type="number" min="1" max="100" defaultValue="70" /></label><label>Reward per builder (GEN)<input required name="reward" type="number" min="0.000001" step="0.000001" /></label><label>Funded reward slots<input required name="slots" type="number" min="1" defaultValue="3" /></label><label>Deadline<input required name="deadline" type="datetime-local" /></label><label className="wide">Description<textarea required name="description" /></label><label className="wide">Evidence requirements<textarea required name="requirements" placeholder="Exact tokens: [requires:github] [requires:x] [requires:portfolio] [requires:additional]" /></label></div><button className="button primary" disabled={!isConnected || !PROOFSCORE_IS_CONFIGURED}>Create campaign + deposit pool</button><small>Payable value is sent in wei. The transaction hash is immediate; campaign state appears only after acceptance.</small></form></section>
+    <section className="section create" id="create"><div><span className="eyebrow">SPONSOR A SETTLEMENT</span><h2>Create and fund a campaign</h2><p>The deposited GEN becomes the campaign reward pool. Every accepted score at or above your threshold unlocks one fixed claim, while creator counter-evidence can revise eligibility before claim.</p></div><form className="glass-form" onSubmit={createCampaign}><div className="form-grid"><label>Campaign title<input required name="title" minLength={3} maxLength={100} /></label><label>Minimum ProofScore<input required name="threshold" type="number" min="1" max="100" defaultValue="70" /></label><label>Reward per builder (GEN)<input required name="reward" type="number" min="0.000001" step="0.000001" /></label><label>Funded reward slots<input required name="slots" type="number" min="1" step="1" defaultValue="3" /></label><label>Deadline<input required name="deadline" type="datetime-local" min={formatLocalDateTime(new Date(nowMs + MIN_DEADLINE_AHEAD_MS), true)} defaultValue={formatLocalDateTime(new Date(nowMs + DEFAULT_DEADLINE_AHEAD_MS))} aria-describedby={`deadline-guidance${deadlineError ? ' deadline-error' : ''}`} aria-invalid={deadlineError ? true : undefined} onChange={() => { if (deadlineError) { setDeadlineError(''); setError('') } }} /><small id="deadline-guidance">Uses your local timezone and must be at least 10 minutes ahead.</small>{deadlineError && <small className="field-error" id="deadline-error" role="alert">{deadlineError}</small>}</label><label className="wide">Description<textarea required name="description" /></label><label className="wide">Evidence requirements<textarea required name="requirements" placeholder="Exact tokens: [requires:github] [requires:x] [requires:portfolio] [requires:additional]" /></label></div><button className="button primary" disabled={!isConnected || !PROOFSCORE_IS_CONFIGURED}>Create campaign + deposit pool</button><small>Payable value is sent in wei. The transaction hash is immediate; campaign state appears only after accepted execution succeeds.</small></form></section>
 
     <section className="section proof-section" id="deployment-proof"><header className="section-head"><div><span className="eyebrow">DEPLOYMENT RECORD</span><h2>Deployment proof</h2></div><span className={`proof-seal ${hasRecordedDeploymentProof ? '' : 'unavailable'}`}>{hasRecordedDeploymentProof ? '✓ ON-CHAIN PROOF' : 'PROOF NOT RECORDED'}</span></header><div className="proof-card"><div className="proof-contract">{PROOFSCORE_IS_CONFIGURED ? <><span>Configured ProofScore contract</span><code>{PROOFSCORE_CONTRACT_ADDRESS}</code><a href={`${BRADBURY_EXPLORER}/address/${PROOFSCORE_CONTRACT_ADDRESS}`} target="_blank" rel="noreferrer">View configured contract ↗</a></> : <><span>Contract configuration</span><div className="config-empty">No v9 contract configured</div><p className="config-copy">Set NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS to enable live reads and writes.</p></>}</div>{hasRecordedDeploymentProof ? <div className="proof-list">{proofTransactions.map(([label, hash], index) => <a href={`${BRADBURY_EXPLORER}/tx/${hash}`} target="_blank" rel="noreferrer" key={hash}><i>{String(index + 1).padStart(2, '0')}</i><span><small>{label}</small><code>{hash}</code></span><b>↗</b></a>)}</div> : <div className="proof-unavailable"><span>Deployment proof unavailable</span><p>{PROOFSCORE_IS_CONFIGURED ? 'Deployment proof is available only for the recorded final v9 deployment. This configured address does not match the recorded proof bundle.' : 'No proof transactions are shown because a v9 contract is not configured.'}</p></div>}</div>{hasRecordedDeploymentProof && <p className="proof-note">Transaction references are fixed deployment artifacts. Explorer status is the source of truth for finality.</p>}</section>
 
