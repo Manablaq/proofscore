@@ -56,7 +56,13 @@ cp .env.example .env.local
 npm run dev
 ```
 
-The default contract address is the zero address and disables live reads/writes. After a separately authorized deployment, set `NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS`. There is deliberately no fallback to an earlier deployment.
+The accepted ProofScore v9 production candidate is `0x0a4E4cBBF682aE0EdedE09865eD0A338518976C3`. Configure it with:
+
+```text
+NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS=0x0a4E4cBBF682aE0EdedE09865eD0A338518976C3
+```
+
+There is deliberately no runtime fallback to an earlier deployment. See the deployment record for the Studio deploy transaction and complete accepted-state smoke proof. The recorded transactions are accepted with finalization pending unless the explorer subsequently reports them finalized.
 
 ## Verification
 

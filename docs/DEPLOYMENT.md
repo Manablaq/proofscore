@@ -1,12 +1,32 @@
 # ProofScore v9 Deployment
 
-Deployment is intentionally separate from implementation. Do not reuse an earlier contract address: v9 changes storage and public methods.
+## Accepted production candidate
 
-The earlier source was deployed at `0xE01239760aA51069107B27915b63583E6fd91b3f`, but it is not production-ready. Its first `submit_builder_profile` transaction (`0xb8b4cf0189d4a24b28381aafd21c47eb09a5ff7134dd7f1a97f76dbf0a5e3b4c`) ended `UNDETERMINED` / `NO_MAJORITY` and was not accepted. Do not resubmit that transaction. Do not update the production address to this deployment or any replacement until a fresh deployment passes the complete accepted-state smoke test.
+Contract: `0x0a4E4cBBF682aE0EdedE09865eD0A338518976C3`
 
-The hardened source at `0xD09cF426b9CeA68ff6106b9ce098399100e03303` passed accepted create, submit, and claim smoke transactions with `FINISHED_WITH_RETURN`, but it is not final production. Campaign 2 challenge transaction `0xd85069809c52741850325799689c19ef7aefb99faf9c9691578f8f120a82d749` finalized with consensus `AGREE` but execution `FINISHED_WITH_ERROR` because its leaderboard rerank used unsupported indexed `DynArray.pop`. Do not update the production address until a fresh deployment passes create/submit/challenge/claim smoke, or create/submit/challenge/no-claim smoke when the challenge intentionally makes the submission ineligible.
+Studio deploy transaction: `0xc9e7487b6300b305fa8ce9c12770f48e67c656cef17c006242f96b54eaf289bb`
 
-This source intentionally limits v9 to 25 campaigns, 25 submissions per campaign, and a top-25 leaderboard for Bradbury/testnet safety. Exact leaderboard rebuilding is consequently capped at 625 candidates. These runtime and storage-bound changes require a fresh deployment; no previous address is production-ready.
+This is the final accepted v9 production candidate. The deployment and smoke transactions below are recorded as accepted; accepted does not mean finalized. Treat them as **accepted / finalization pending** unless the explorer later reports `FINALIZED`. In particular, `claim_reward` scheduled payout finalization and does not establish that the external payout has finalized.
+
+## Accepted-state smoke proof
+
+Campaign ID `1` and submission ID `1` completed the entire flow:
+
+- `create_campaign`: `0x91d2dcb5dd9445bcad04c85fda7b10e75fbf5e61ec028691627e93d14942a0d9`
+- `submit_builder_profile`: `0xbc2b1669f528a12e8b97694db7809c8f51f58d2ce62a004a7bc1cd1de8a30478`
+- `challenge_score`: `0xe6ca01a9a7cf00132fb09f8bdb14f67fd09dcd80442a2e2a90089785efe72aea`
+- `claim_reward`: `0x633c79ac18b7e70b5b524adfde595c2daf747954b460ca82ac13a8ed1bfd2070`
+
+All four transactions reported `ACCEPTED`, consensus `AGREE`, and execution `FINISHED_WITH_RETURN`. The submission scored 85 before challenge. The `[invalid:additional]` challenge reduced it to 65 while its decision remained `QUALIFIED`; `eligible_to_claim` remained true before claim. The claim then scheduled payout finalization.
+
+The accepted `get_stats` state was: campaigns `1`, submissions `1`, challenges `1`, claims scheduled `1`, and total locked wei `0`.
+
+## Historical failed deployments
+
+- `0xE01239760aA51069107B27915b63583E6fd91b3f` failed submit consensus: its first `submit_builder_profile` transaction (`0xb8b4cf0189d4a24b28381aafd21c47eb09a5ff7134dd7f1a97f76dbf0a5e3b4c`) ended `UNDETERMINED` / `NO_MAJORITY` and was not accepted.
+- `0xD09cF426b9CeA68ff6106b9ce098399100e03303` passed create, submit, and claim, but its challenge failed because the old leaderboard rerank used unsupported indexed `DynArray.pop`. Campaign 2 challenge transaction `0xd85069809c52741850325799689c19ef7aefb99faf9c9691578f8f120a82d749` reached consensus `AGREE` but execution `FINISHED_WITH_ERROR`.
+
+This source intentionally limits v9 to 25 campaigns, 25 submissions per campaign, and a top-25 leaderboard for Bradbury/testnet safety. Exact leaderboard rebuilding is consequently capped at 625 candidates.
 
 ## Preflight
 
@@ -20,10 +40,10 @@ Never put `GENLAYER_DEPLOYER_PK` in `.env`, `.env.local`, source, logs, screensh
 
 ## Configure the app
 
-After finalization, set the frontend deployment environment variable:
+Set the frontend deployment environment variable:
 
 ```text
-NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS=0x…
+NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS=0x0a4E4cBBF682aE0EdedE09865eD0A338518976C3
 ```
 
 Optionally override `NEXT_PUBLIC_GENLAYER_RPC`. Build and deploy the frontend separately. Until an address is configured, the app visibly remains in preview mode with reads/writes disabled.

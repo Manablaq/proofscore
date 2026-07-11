@@ -28,7 +28,13 @@ Campaigns declare mandatory categories only through exact lowercase `[requires:g
 
 Any participant can submit a bounded, source-backed challenge. Before claim, the campaign creator can deterministically remove category points using exact lowercase `[invalid:github]`, `[invalid:x]`, `[invalid:portfolio]`, or `[invalid:additional]` tags. `[invalid:duplicate]` and `[invalid:irrelevant]` force `INVALID`. Eligibility and campaign qualified counts are recomputed. Non-creator, untagged, and post-claim challenges are recorded without changing payout eligibility; there is no clawback.
 
-The old submit transaction `0xb8b4cf0189d4a24b28381aafd21c47eb09a5ff7134dd7f1a97f76dbf0a5e3b4c` was not accepted. No production address should be changed until this source is freshly deployed and the complete smoke flow passes.
+## Accepted production proof
+
+The final accepted v9 production candidate is `0x0a4E4cBBF682aE0EdedE09865eD0A338518976C3`, deployed by Studio transaction `0xc9e7487b6300b305fa8ce9c12770f48e67c656cef17c006242f96b54eaf289bb`.
+
+The complete campaign `1`, submission `1` smoke flow was accepted with consensus `AGREE` and execution `FINISHED_WITH_RETURN` for `create_campaign` (`0x91d2dcb5dd9445bcad04c85fda7b10e75fbf5e61ec028691627e93d14942a0d9`), `submit_builder_profile` (`0xbc2b1669f528a12e8b97694db7809c8f51f58d2ce62a004a7bc1cd1de8a30478`), `challenge_score` (`0xe6ca01a9a7cf00132fb09f8bdb14f67fd09dcd80442a2e2a90089785efe72aea`), and `claim_reward` (`0x633c79ac18b7e70b5b524adfde595c2daf747954b460ca82ac13a8ed1bfd2070`). The `[invalid:additional]` challenge reduced score 85 to 65 while the decision remained `QUALIFIED` and the submission remained eligible before claim. Claim scheduled payout finalization. Accepted stats were one campaign, submission, challenge, and scheduled claim, with `total_locked_wei` 0.
+
+These results are **accepted / finalization pending**, not finalized, unless the explorer later reports finality. Earlier addresses remain historical failures: `0xE01239760aA51069107B27915b63583E6fd91b3f` failed submit consensus, while `0xD09cF426b9CeA68ff6106b9ce098399100e03303` passed create/submit/claim but its challenge failed because of the old indexed `DynArray.pop` implementation.
 
 ## Honest state language
 
