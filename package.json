@@ -7,7 +7,8 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
-    "deploy:v8": "node scripts/deploy-v8.mjs"
+    "deploy:v9": "node scripts/deploy-proofscore-v9.mjs",
+    "smoke:v9": "node scripts/smoke-proofscore-v9.mjs"
   },
   "dependencies": {
     "@rainbow-me/rainbowkit": "^2.2.11",

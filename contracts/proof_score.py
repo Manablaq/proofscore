@@ -1,469 +1,568 @@
 # v0.1.0
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 from genlayer import *
+from datetime import datetime
 import json
 
-# ProofScore v8 - evidence-backed tier validation.
-# Stronger than v7:
-# - stores compact evidence for each dimension alongside score fields
-# - applies deterministic caps for sparse or unavailable evidence
-# - asks validators to check JSON shape, allowed tiers, non-empty reasoning,
-#   and whether the cited evidence supports the selected tier under the rubric
-# Still not proved:
-# - wallet ownership of off-chain profiles
-# - objective truth of external pages
-# - complete identity verification
-#
-# Redeploy required: this file changes contract runtime behavior and storage
-# payload contents while preserving public method names and frontend score keys.
 
-VALID_TIERS = [0, 40, 80, 120, 160, 200]
+@gl.evm.contract_interface
+class _Recipient:
+    class View:
+        pass
+
+    class Write:
+        pass
 
 
-def _tier(n: int) -> int:
-    n = max(0, min(200, int(n)))
-    if n < 20:
-        return 0
-    if n < 60:
-        return 40
-    if n < 100:
-        return 80
-    if n < 140:
-        return 120
-    if n < 180:
-        return 160
-    return 200
+DECISIONS = ["QUALIFIED", "NOT_QUALIFIED", "INVALID"]
+CONFIDENCES = ["HIGH", "MEDIUM", "LOW"]
+VERDICTS = ["UPHOLD", "REDUCE_SCORE", "INCREASE_SCORE", "INVALIDATE", "NEEDS_MORE_EVIDENCE"]
 
 
-def _cap_tier(n: int, cap: int) -> int:
-    return min(_tier(n), _tier(cap))
-
-
-def _safe_json(text: str) -> dict:
+def _now() -> int:
+    """Return deterministic transaction time from GenLayer message metadata."""
     try:
-        s = text.strip()
-        if s.startswith("```"):
-            s = s.split("```")[1]
-            if s.startswith("json"):
-                s = s[4:]
-        return json.loads(s.strip())
+        raw = gl.message_raw["datetime"]
+        if isinstance(raw, (int, float)):
+            timestamp = int(raw)
+        else:
+            value = str(raw).strip()
+            if value.replace(".", "", 1).isdigit():
+                timestamp = int(float(value))
+            else:
+                normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+                parsed = datetime.fromisoformat(normalized)
+                assert parsed.tzinfo is not None, "transaction datetime must include a timezone"
+                timestamp = int(parsed.timestamp())
+        # Numeric providers may expose milliseconds rather than seconds.
+        if timestamp >= 1000000000000:
+            timestamp = timestamp // 1000
+        assert timestamp > 0, "transaction datetime must be positive"
+        return timestamp
+    except AssertionError:
+        raise
+    except:
+        assert False, "unusable GenLayer transaction datetime"
+        return 0
+
+
+def _clean(value, limit: int = 1200) -> str:
+    try:
+        text = str(value).replace("\r", " ").replace("\x00", " ").strip()
+        return text[:limit]
+    except:
+        return ""
+
+
+def _safe_json(raw: str) -> dict:
+    try:
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("```", 2)[1]
+            if text.lstrip().startswith("json"):
+                text = text.lstrip()[4:]
+        parsed = json.loads(text.strip())
+        return parsed if isinstance(parsed, dict) else {}
     except:
         return {}
 
 
-def _safe_int(value, default: int = 0) -> int:
+def _integer(value, default: int = 0) -> int:
     try:
         return int(value)
     except:
         return default
 
 
-def _clean(text: str, limit: int = 420) -> str:
-    try:
-        s = str(text).replace("\n", " ").replace("\r", " ").replace('"', "'")
-        while "  " in s:
-            s = s.replace("  ", " ")
-        return s[:limit]
-    except:
-        return ""
+def _strings(value, limit: int = 12) -> list:
+    if not isinstance(value, list):
+        return []
+    return [_clean(item, 360) for item in value[:limit] if _clean(item, 360)]
 
 
-def _url_handle(url: str) -> str:
-    try:
-        u = url.rstrip("/")
-        return u.split("/")[-1].lstrip("@").split("?")[0]
-    except:
-        return ""
+def _score_result(raw: str) -> dict:
+    data = _safe_json(raw)
+    dimensions_raw = data.get("dimensions", {})
+    if not isinstance(dimensions_raw, dict):
+        dimensions_raw = {}
+    dimensions = {}
+    for key in ["build", "voice", "craft", "network", "consistency"]:
+        dimensions[key] = max(0, min(20, _integer(dimensions_raw.get(key, 0))))
+    score = max(0, min(100, _integer(data.get("score", sum(dimensions.values())))))
+    decision = _clean(data.get("decision", "INVALID"), 24).upper()
+    confidence = _clean(data.get("confidence", "LOW"), 12).upper()
+    if decision not in DECISIONS:
+        decision = "INVALID"
+    if confidence not in CONFIDENCES:
+        confidence = "LOW"
+    if not _clean(data.get("reasoning", ""), 2000):
+        decision = "INVALID"
+        confidence = "LOW"
+    if not _strings(data.get("accepted_sources", [])):
+        decision = "INVALID"
+        score = min(score, 39)
+    return {
+        "score": score,
+        "decision": decision,
+        "confidence": confidence,
+        "dimensions": dimensions,
+        "evidence_summary": _clean(data.get("evidence_summary", "No verifiable evidence summary returned."), 1600),
+        "accepted_sources": _strings(data.get("accepted_sources", [])),
+        "rejected_sources": _strings(data.get("rejected_sources", [])),
+        "risk_flags": _strings(data.get("risk_flags", [])),
+        "reasoning": _clean(data.get("reasoning", "Validator output was incomplete."), 2000),
+    }
 
 
-def _github_handle(url: str) -> str:
-    try:
-        part = url.rstrip("/").split("github.com/")[-1]
-        return part.split("/")[0].split("?")[0]
-    except:
-        return _url_handle(url)
-
-
-def _json_score(raw: str, fallback_score: int, fallback_reason: str) -> dict:
-    d = _safe_json(raw)
-    score = _tier(_safe_int(d.get("score", fallback_score), fallback_score))
-    reasoning = _clean(d.get("reasoning", fallback_reason), 360)
-    evidence = _clean(d.get("evidence", ""), 360)
-    if not reasoning:
-        reasoning = fallback_reason
-    return {"score": score, "reasoning": reasoning, "evidence": evidence}
-
-
-def _semantic_criteria(allowed: str, extra: str) -> str:
-    return (
-        "Accept only if the answer is a valid JSON object with fields: "
-        "score, reasoning, evidence. score must be exactly one of: " + allowed + ". "
-        "reasoning and evidence must be non-empty strings. The evidence must be derived "
-        "from the supplied input, not invented. The reasoning must explain why the chosen "
-        "tier follows the rubric and must not materially exceed what the supplied evidence "
-        "supports. " + extra
-    )
+def _challenge_result(raw: str, previous_score: int, previous_decision: str) -> dict:
+    data = _safe_json(raw)
+    verdict = _clean(data.get("verdict", "NEEDS_MORE_EVIDENCE"), 32).upper()
+    decision = _clean(data.get("revised_decision", previous_decision), 24).upper()
+    confidence = _clean(data.get("confidence", "LOW"), 12).upper()
+    score = max(0, min(100, _integer(data.get("revised_score", previous_score), previous_score)))
+    if verdict not in VERDICTS:
+        verdict = "NEEDS_MORE_EVIDENCE"
+    if decision not in DECISIONS:
+        decision = previous_decision if previous_decision in DECISIONS else "INVALID"
+    if confidence not in CONFIDENCES:
+        confidence = "LOW"
+    if verdict in ["UPHOLD", "NEEDS_MORE_EVIDENCE"]:
+        score = previous_score
+        decision = previous_decision
+    elif verdict == "REDUCE_SCORE":
+        score = min(score, previous_score)
+    elif verdict == "INCREASE_SCORE":
+        score = max(score, previous_score)
+    if verdict == "INVALIDATE":
+        decision = "INVALID"
+        score = min(score, 39)
+    if not _clean(data.get("reasoning", ""), 2000):
+        verdict = "NEEDS_MORE_EVIDENCE"
+        score = previous_score
+        decision = previous_decision
+        confidence = "LOW"
+    return {
+        "verdict": verdict,
+        "revised_score": score,
+        "revised_decision": decision,
+        "confidence": confidence,
+        "reasoning": _clean(data.get("reasoning", "Challenge output was incomplete; prior result retained."), 2000),
+        "accepted_challenge_sources": _strings(data.get("accepted_challenge_sources", [])),
+        "rejected_challenge_sources": _strings(data.get("rejected_challenge_sources", [])),
+        "risk_flags": _strings(data.get("risk_flags", [])),
+    }
 
 
 class ProofScore(gl.Contract):
-    scores: TreeMap[str, str]
-    usernames: TreeMap[str, str]
+    campaigns: TreeMap[str, str]
+    campaign_ids: DynArray[str]
+    submissions: TreeMap[str, str]
+    submission_ids: TreeMap[str, str]
+    challenges: TreeMap[str, str]
+    challenge_ids: TreeMap[str, str]
     leaderboard: DynArray[str]
-    total_profiles: str
+    campaign_count: int
+    submission_count: int
+    challenge_count: int
+    claimed_count: int
+    total_locked_wei: str
+    total_funded_wei: str
+    total_claimed_wei: str
+    total_refunded_wei: str
 
     def __init__(self):
-        self.total_profiles = "0"
+        self.campaign_count = 0
+        self.submission_count = 0
+        self.challenge_count = 0
+        self.claimed_count = 0
+        self.total_locked_wei = "0"
+        self.total_funded_wei = "0"
+        self.total_claimed_wei = "0"
+        self.total_refunded_wei = "0"
+
+    def _campaign(self, campaign_id: str) -> dict:
+        raw = self.campaigns.get(campaign_id, None)
+        assert raw is not None, "Campaign not found."
+        return json.loads(raw)
+
+    def _submission(self, campaign_id: str, submission_id: str) -> dict:
+        raw = self.submissions.get(campaign_id + ":" + submission_id, None)
+        assert raw is not None, "Submission not found."
+        return json.loads(raw)
+
+    @gl.public.write.payable
+    def create_campaign(
+        self,
+        title: str,
+        description: str,
+        threshold_score: int,
+        reward_per_qualified_builder: str,
+        deadline: int,
+        evidence_requirements: str,
+    ) -> None:
+        assert 3 <= len(title) <= 100, "Title must be 3-100 characters."
+        assert 1 <= len(description) <= 1200, "Description is required."
+        assert 1 <= threshold_score <= 100, "Threshold must be 1-100."
+        reward = _integer(reward_per_qualified_builder)
+        deposit = int(gl.message.value)
+        assert reward > 0, "Reward must be positive wei."
+        assert deposit >= reward, "Deposit must fund at least one reward."
+        assert deadline > _now(), "Deadline must be in the future."
+        assert len(evidence_requirements) > 0, "Evidence requirements are required."
+
+        campaign_id = str(self.campaign_count + 1)
+        campaign = {
+            "version": "v9",
+            "campaign_id": campaign_id,
+            "creator": str(gl.message.sender_address),
+            "title": _clean(title, 100),
+            "description": _clean(description, 1200),
+            "threshold_score": threshold_score,
+            "reward_per_qualified_builder": str(reward),
+            "total_pool": str(deposit),
+            "remaining_pool": str(deposit),
+            "deadline": deadline,
+            "evidence_requirements": _clean(evidence_requirements, 1600),
+            "status": "OPEN",
+            "created_at": _now(),
+            "closed_at": 0,
+            "submissions_count": 0,
+            "qualified_count": 0,
+        }
+        self.campaigns[campaign_id] = json.dumps(campaign)
+        self.campaign_ids.append(campaign_id)
+        self.submission_ids[campaign_id] = "[]"
+        self.campaign_count += 1
+        self.total_locked_wei = str(_integer(self.total_locked_wei) + deposit)
+        self.total_funded_wei = str(_integer(self.total_funded_wei) + deposit)
 
     @gl.public.write
-    def generate_score(
+    def submit_builder_profile(
         self,
-        username: str,
+        campaign_id: str,
+        handle: str,
         github_url: str,
-        twitter_url: str,
+        x_url: str,
         portfolio_url: str,
+        additional_evidence_url: str,
+        notes: str,
     ) -> None:
-        address = str(gl.message.sender_address)
-        now_str = gl.message_raw["datetime"]
+        campaign = self._campaign(campaign_id)
+        assert campaign["status"] == "OPEN", "Campaign is not open."
+        assert _now() <= _integer(campaign["deadline"]), "Campaign deadline has passed."
+        assert 2 <= len(handle) <= 80, "Handle must be 2-80 characters."
+        sources = [url for url in [github_url, x_url, portfolio_url, additional_evidence_url] if url and url != "none"]
+        assert len(sources) > 0, "Provide at least one evidence URL."
+        submitter = str(gl.message.sender_address)
 
-        existing_raw = self.scores.get(address, None)
-        if existing_raw is not None:
-            try:
-                ex = json.loads(existing_raw)
-                last_str = ex.get("last_updated", "")
-                if last_str and len(last_str) >= 10 and len(now_str) >= 10:
-                    if now_str[:10] <= last_str[:10]:
-                        assert False, "Already scored today. Wait 7 days to refresh."
-            except AssertionError:
-                raise
-            except:
-                pass
+        # Metadata-only resolver: validators judge the submitted source identifiers,
+        # notes, and requirements. No claim is made that a URL proves ownership.
+        evidence_record = {
+            "handle": _clean(handle, 80),
+            "github_url": _clean(github_url, 500),
+            "x_url": _clean(x_url, 500),
+            "portfolio_url": _clean(portfolio_url, 500),
+            "additional_evidence_url": _clean(additional_evidence_url, 500),
+            "notes": _clean(notes, 1800),
+            "source_identifiers": sources,
+        }
 
-        assert len(username) >= 2 and len(username) <= 30, "Username must be 2-30 chars."
-        has_gh = bool(github_url and github_url != "none")
-        has_tw = bool(twitter_url and twitter_url != "none")
-        has_po = bool(portfolio_url and portfolio_url != "none")
-        assert has_gh or has_tw or has_po, "Provide at least one URL."
+        def get_input() -> str:
+            return json.dumps({
+                "campaign_title": campaign["title"],
+                "campaign_description": campaign["description"],
+                "threshold_score": campaign["threshold_score"],
+                "evidence_requirements": campaign["evidence_requirements"],
+                "submitted_evidence": evidence_record,
+            })
 
-        # BUILD: GitHub metrics are parsed deterministically where possible,
-        # then validator-reviewed for tier support from compact evidence.
-        b, b_r, b_e = 0, "No GitHub provided.", "No GitHub URL submitted."
-        gh_handle = ""
-        if has_gh:
-            gh_handle = _github_handle(github_url)
-
-            def _get_github_input() -> str:
-                user_data = ""
-                repos_data = ""
-                try:
-                    r = gl.nondet.web.get("https://api.github.com/users/" + gh_handle)
-                    user_data = r.body.decode("utf-8")[:1400]
-                except:
-                    pass
-                try:
-                    r2 = gl.nondet.web.get("https://api.github.com/users/" + gh_handle + "/repos?sort=updated&per_page=8")
-                    repos_data = r2.body.decode("utf-8")[:2200]
-                except:
-                    pass
-                return (
-                    "GitHub URL: " + github_url + "\n"
-                    "Handle: " + gh_handle + "\n"
-                    "User JSON: " + (user_data if user_data else "UNAVAILABLE") + "\n"
-                    "Recent repos JSON: " + (repos_data if repos_data else "UNAVAILABLE")
-                )
-
-            gh_raw = gl.eq_principle.prompt_non_comparative(
-                _get_github_input,
-                task=(
-                    "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
-                    "Score BUILD from GitHub evidence. Tiers: 0 no accessible or meaningful evidence; "
-                    "40 accessible but sparse/tutorial/fork-heavy; 80 several real repos or activity; "
-                    "120 clear builder with consistent recent repos; 160 strong depth, many repos, stars, "
-                    "or notable projects; 200 exceptional public impact. Evidence must cite compact facts "
-                    "such as public_repos, followers, repo names, stars, forks, account age, or access limits."
-                ),
-                criteria=_semantic_criteria(
-                    "0, 40, 80, 120, 160, 200",
-                    "If GitHub API data is unavailable, score must be 0 or 40. Scores 160 or 200 require strong cited evidence.",
-                ),
-            )
-            gh = _json_score(gh_raw, 40, "GitHub scored conservatively.")
-            b = gh["score"]
-            b_r = gh["reasoning"]
-            b_e = gh["evidence"] if gh["evidence"] else "GitHub handle " + gh_handle
-
-        # VOICE: X/Twitter often blocks scraping; inaccessible pages are capped.
-        v, v_r, v_e = 0, "No Twitter/X provided.", "No Twitter/X URL submitted."
-        tw_handle = ""
-        if has_tw:
-            tw_handle = _url_handle(twitter_url)
-
-            def _get_twitter_input() -> str:
-                content = ""
-                try:
-                    r = gl.nondet.web.get(twitter_url)
-                    content = r.body.decode("utf-8")[:1800]
-                except:
-                    pass
-                if len(content) > 180:
-                    return "Twitter/X URL: " + twitter_url + "\nHandle: @" + tw_handle + "\nContent: " + content
-                return "Twitter/X URL: " + twitter_url + "\nHandle: @" + tw_handle + "\nContent: UNAVAILABLE_OR_BLOCKED"
-
-            tw_raw = gl.eq_principle.prompt_non_comparative(
-                _get_twitter_input,
-                task=(
-                    "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
-                    "Score VOICE from visible professional content. Tiers: 0 spam-like, empty, or unrelated; "
-                    "40 handle only, blocked, sparse, or uncertain; 80 some professional relevance; "
-                    "120 consistent domain expertise; 160 strong public professional presence; "
-                    "200 major public influence. Do not claim account ownership."
-                ),
-                criteria=_semantic_criteria(
-                    "0, 40, 80, 120, 160, 200",
-                    "If content is unavailable or blocked, score must be 0 or 40. Do not accept identity ownership claims.",
-                ),
-            )
-            tw = _json_score(tw_raw, 40, "Twitter/X scored conservatively due to limited access.")
-            v = tw["score"]
-            v_r = tw["reasoning"]
-            v_e = tw["evidence"] if tw["evidence"] else "Twitter/X handle @" + tw_handle
-
-        # CRAFT: portfolio fetch is compact and capped if unavailable.
-        c, c_r, c_e = 0, "No portfolio provided.", "No portfolio URL submitted."
-        if has_po:
-            def _get_portfolio_input() -> str:
-                content = ""
-                try:
-                    r = gl.nondet.web.get(portfolio_url)
-                    content = r.body.decode("utf-8")[:2400]
-                except:
-                    pass
-                if len(content) > 100:
-                    return "Portfolio URL: " + portfolio_url + "\nContent: " + content
-                return "Portfolio URL: " + portfolio_url + "\nContent: UNAVAILABLE_OR_TOO_SMALL"
-
-            po_raw = gl.eq_principle.prompt_non_comparative(
-                _get_portfolio_input,
-                task=(
-                    "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
-                    "Score CRAFT from portfolio/work evidence. Tiers: 0 broken/empty/no work evidence; "
-                    "40 minimal or inaccessible; 80 real work with basic quality; 120 good portfolio with "
-                    "clear skills and examples; 160 professional-grade presentation and impact; "
-                    "200 exceptional or widely recognized work. Evidence must cite visible signals."
-                ),
-                criteria=_semantic_criteria(
-                    "0, 40, 80, 120, 160, 200",
-                    "If content is unavailable or too small, score must be 0 or 40. High tiers require concrete visible work evidence.",
-                ),
-            )
-            po = _json_score(po_raw, 40, "Portfolio scored conservatively.")
-            c = po["score"]
-            c_r = po["reasoning"]
-            c_e = po["evidence"] if po["evidence"] else "Portfolio URL submitted."
-
-        # NETWORK: valid wallet gets a conservative base; high tiers require page evidence.
-        def _get_network_input() -> str:
-            bradbury_content = ""
-            eth_content = ""
-            try:
-                r = gl.nondet.web.get("https://explorer-bradbury.genlayer.com/address/" + address)
-                bradbury_content = r.body.decode("utf-8")[:800]
-            except:
-                pass
-            try:
-                r = gl.nondet.web.get("https://etherscan.io/address/" + address)
-                eth_content = r.body.decode("utf-8")[:800]
-            except:
-                pass
-            return (
-                "Wallet address: " + address + "\n"
-                "Bradbury explorer content: " + (bradbury_content if bradbury_content else "UNAVAILABLE") + "\n"
-                "Ethereum address page content: " + (eth_content if eth_content else "UNAVAILABLE")
-            )
-
-        net_raw = gl.eq_principle.prompt_non_comparative(
-            _get_network_input,
+        raw = gl.eq_principle.prompt_non_comparative(
+            get_input,
             task=(
-                "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
-                "Score NETWORK. Tiers: 40 valid wallet with unavailable/no visible history; "
-                "80 some visible activity; 120 moderate visible activity or multiple interactions; "
-                "160 active history across protocols or many transactions; 200 extensive power-user history. "
-                "Evidence must cite visible page signals or access limits."
+                "Assess builder evidence for a bounty. Treat URLs as source identifiers and notes as claims, not identity proof. "
+                "Return strict JSON only with score (0-100), decision (QUALIFIED, NOT_QUALIFIED, or INVALID), "
+                "confidence (HIGH, MEDIUM, or LOW), dimensions with build/voice/craft/network/consistency each 0-20, "
+                "evidence_summary, accepted_sources array, rejected_sources array, risk_flags array, and reasoning. "
+                "The five dimensions should sum to score. QUALIFIED requires credible source-backed evidence matching the campaign. "
+                "Use INVALID for malformed, irrelevant, or unverifiable identifiers; use NOT_QUALIFIED for valid but weak evidence."
             ),
-            criteria=_semantic_criteria(
-                "40, 80, 120, 160, 200",
-                "If both address pages are unavailable or show no clear activity, score must be 40.",
-            ),
-        )
-        net = _json_score(net_raw, 40, "Network scored conservatively.")
-        n = max(40, net["score"])
-        n_r = net["reasoning"]
-        n_e = net["evidence"] if net["evidence"] else "Wallet address " + address
-
-        # CONSISTENCY: based on submitted handles/evidence, with deterministic caps.
-        platform_count = sum([has_gh, has_tw, has_po])
-
-        def _get_consistency_input() -> str:
-            parts = ["Display name: " + username, "Wallet address: " + address]
-            if has_gh:
-                parts.append("GitHub: " + github_url + " handle=" + gh_handle + " score=" + str(b) + " evidence=" + b_e)
-            if has_tw:
-                parts.append("Twitter/X: " + twitter_url + " handle=" + tw_handle + " score=" + str(v) + " evidence=" + v_e)
-            if has_po:
-                parts.append("Portfolio: " + portfolio_url + " score=" + str(c) + " evidence=" + c_e)
-            return "\n".join(parts)
-
-        con_raw = gl.eq_principle.prompt_non_comparative(
-            _get_consistency_input,
-            task=(
-                "Return JSON only: {\"score\": tier, \"reasoning\": string, \"evidence\": string}. "
-                "Score CONSISTENCY from visible overlap across submitted URLs, handles, display name, "
-                "and evidence summaries. Tiers: 0 clear contradiction/unrelated; 40 weak or sparse alignment; "
-                "80 plausible alignment; 120 good alignment across two or more sources; 160 strong reinforcing "
-                "professional identity; 200 exceptional coherence across all sources. Do not claim ownership proof."
-            ),
-            criteria=_semantic_criteria(
-                "0, 40, 80, 120, 160, 200",
-                "With one submitted platform, score must be at most 80. With two submitted platforms, score must be at most 120. Do not accept ownership-proof claims.",
+            criteria=(
+                "Accept only one valid JSON object with every requested field and allowed enum. Scores must be integers in range, "
+                "dimension totals must materially agree with score, reasoning must connect accepted source identifiers to the campaign "
+                "requirements, and uncertainty or inaccessible content must lower confidence and score. Never accept claims of wallet/profile ownership proof."
             ),
         )
-        con = _json_score(con_raw, 80, "Consistency scored from submitted evidence.")
-        x = con["score"]
-        if platform_count <= 1:
-            x = min(x, 80)
-        elif platform_count == 2:
-            x = min(x, 120)
-        x_r = con["reasoning"]
-        x_e = con["evidence"] if con["evidence"] else "Submitted platform count: " + str(platform_count)
-
-        total = b + v + c + n + x
-        evidence = {
-            "build": b_e,
-            "voice": v_e,
-            "craft": c_e,
-            "network": n_e,
-            "consistency": x_e,
+        result = _score_result(raw)
+        eligible = result["decision"] == "QUALIFIED" and result["score"] >= _integer(campaign["threshold_score"])
+        submission_id = str(campaign["submissions_count"] + 1)
+        submission = {
+            "version": "v9",
+            "campaign_id": campaign_id,
+            "submission_id": submission_id,
+            "builder": submitter,
+            "handle": evidence_record["handle"],
+            "github_url": evidence_record["github_url"],
+            "x_url": evidence_record["x_url"],
+            "portfolio_url": evidence_record["portfolio_url"],
+            "additional_evidence_url": evidence_record["additional_evidence_url"],
+            "notes": evidence_record["notes"],
+            **result,
+            "original_score": result["score"],
+            "original_decision": result["decision"],
+            "eligible_to_claim": eligible,
+            "claimed": False,
+            "payout_status": "UNCLAIMED",
+            "submitted_at": _now(),
+            "claimed_at": 0,
+            "challenge_count": 0,
+            "last_challenged_at": 0,
+            "revision_count": 0,
         }
+        key = campaign_id + ":" + submission_id
+        self.submissions[key] = json.dumps(submission)
+        ids = json.loads(self.submission_ids.get(campaign_id, "[]"))
+        ids.append(submission_id)
+        self.submission_ids[campaign_id] = json.dumps(ids)
+        self.challenge_ids[key] = "[]"
+        campaign["submissions_count"] += 1
+        if eligible:
+            campaign["qualified_count"] += 1
+        self.campaigns[campaign_id] = json.dumps(campaign)
+        self.submission_count += 1
+        self._rank(submission)
 
-        reasoning = (
-            "BUILD(" + str(b) + "): " + b_r + " | " +
-            "VOICE(" + str(v) + "): " + v_r + " | " +
-            "CRAFT(" + str(c) + "): " + c_r + " | " +
-            "NETWORK(" + str(n) + "): " + n_r + " | " +
-            "CONSISTENCY(" + str(x) + "): " + x_r
-        )
-
-        uc = "1"
-        if existing_raw is not None:
-            try:
-                ex = json.loads(existing_raw)
-                uc = str(int(ex.get("update_count", "0")) + 1)
-            except:
-                uc = "2"
-
-        data = {
-            "version": "v8",
-            "build_score": str(b),
-            "consistency_score": str(x),
-            "craft_score": str(c),
-            "github_url": github_url if has_gh else "none",
-            "last_updated": now_str,
-            "network_score": str(n),
-            "portfolio_url": portfolio_url if has_po else "none",
-            "reasoning": _clean(reasoning, 1600),
-            "evidence_summary": _clean(json.dumps(evidence), 1600),
-            "evidence": evidence,
-            "total_score": str(total),
-            "twitter_url": twitter_url if has_tw else "none",
-            "update_count": uc,
-            "voice_score": str(v),
-        }
-
-        self.scores[address] = json.dumps(data)
-        self.usernames[address] = username
-
-        if uc == "1":
-            try:
-                self.total_profiles = str(int(self.total_profiles) + 1)
-            except:
-                self.total_profiles = "1"
-
-        entry = {
-            "address": address,
-            "build_score": str(b),
-            "consistency_score": str(x),
-            "craft_score": str(c),
-            "network_score": str(n),
-            "total_score": str(total),
-            "username": username.replace('"', "'"),
-            "voice_score": str(v),
-        }
-
-        idx = -1
+    def _rank(self, submission: dict) -> None:
+        entry = json.dumps({
+            "campaign_id": submission["campaign_id"],
+            "submission_id": submission["submission_id"],
+            "builder": submission["builder"],
+            "handle": submission["handle"],
+            "score": submission["score"],
+            "decision": submission["decision"],
+        })
+        key = submission["campaign_id"] + ":" + submission["submission_id"]
+        found = -1
         for i in range(len(self.leaderboard)):
             try:
-                e = json.loads(self.leaderboard[i])
-                if e.get("address") == address:
-                    idx = i
+                old = json.loads(self.leaderboard[i])
+                if old["campaign_id"] + ":" + old["submission_id"] == key:
+                    found = i
                     break
             except:
                 pass
-        if idx >= 0:
-            self.leaderboard.pop(idx)
-
+        if found >= 0:
+            self.leaderboard.pop(found)
         inserted = False
-        entry_raw = json.dumps(entry)
         for i in range(len(self.leaderboard)):
             try:
-                e = json.loads(self.leaderboard[i])
-                if int(e.get("total_score", "0")) < total:
-                    self.leaderboard.insert(i, entry_raw)
+                if _integer(json.loads(self.leaderboard[i]).get("score", 0)) < _integer(submission["score"]):
+                    self.leaderboard.insert(i, entry)
                     inserted = True
                     break
             except:
                 pass
         if not inserted:
-            self.leaderboard.append(entry_raw)
+            self.leaderboard.append(entry)
         while len(self.leaderboard) > 50:
             self.leaderboard.pop(len(self.leaderboard) - 1)
 
-    @gl.public.view
-    def get_score(self, address: str) -> str:
-        raw = self.scores.get(address, None)
-        if raw is None:
+    @gl.public.write
+    def claim_reward(self, campaign_id: str, submission_id: str) -> None:
+        campaign = self._campaign(campaign_id)
+        submission = self._submission(campaign_id, submission_id)
+        assert str(gl.message.sender_address) == submission["builder"], "Only the submitting builder can claim."
+        assert submission["eligible_to_claim"], "Accepted score does not qualify for settlement."
+        assert not submission["claimed"], "Reward already claimed."
+        reward = _integer(campaign["reward_per_qualified_builder"])
+        remaining = _integer(campaign["remaining_pool"])
+        assert remaining >= reward, "Campaign pool cannot cover this reward."
+
+        # EOA transfers execute on finalization. Accepted state records that the
+        # payout is scheduled; the UI must not describe it as paid/finalized yet.
+        submission["claimed"] = True
+        submission["eligible_to_claim"] = False
+        submission["payout_status"] = "SCHEDULED_FOR_FINALIZATION"
+        submission["claimed_at"] = _now()
+        campaign["remaining_pool"] = str(remaining - reward)
+        if remaining - reward < reward:
+            campaign["status"] = "EXHAUSTED"
+        self.submissions[campaign_id + ":" + submission_id] = json.dumps(submission)
+        self.campaigns[campaign_id] = json.dumps(campaign)
+        self.claimed_count += 1
+        self.total_claimed_wei = str(_integer(self.total_claimed_wei) + reward)
+        self.total_locked_wei = str(max(0, _integer(self.total_locked_wei) - reward))
+        _Recipient(Address(submission["builder"])).emit_transfer(value=u256(reward))
+
+    @gl.public.write
+    def challenge_score(self, campaign_id: str, submission_id: str, challenge_url: str, reason: str) -> None:
+        campaign = self._campaign(campaign_id)
+        submission = self._submission(campaign_id, submission_id)
+        assert len(challenge_url) > 5, "Challenge evidence URL is required."
+        assert len(reason) >= 10, "Challenge reason must be at least 10 characters."
+        challenger = str(gl.message.sender_address)
+        previous_score = _integer(submission["score"])
+        previous_decision = submission["decision"]
+
+        original = {
+            "handle": submission["handle"],
+            "github_url": submission["github_url"],
+            "x_url": submission["x_url"],
+            "portfolio_url": submission["portfolio_url"],
+            "additional_evidence_url": submission["additional_evidence_url"],
+            "notes": submission["notes"],
+            "accepted_sources": submission["accepted_sources"],
+            "rejected_sources": submission["rejected_sources"],
+            "score": previous_score,
+            "decision": previous_decision,
+            "reasoning": submission["reasoning"],
+        }
+
+        def get_input() -> str:
             return json.dumps({
-                "exists": "false", "address": address,
-                "version": "v8",
-                "total_score": "0", "build_score": "0", "voice_score": "0",
-                "craft_score": "0", "network_score": "0", "consistency_score": "0",
-                "reasoning": "", "evidence_summary": "", "evidence": {},
-                "github_url": "none", "twitter_url": "none",
-                "portfolio_url": "none", "username": "Unknown",
-                "last_updated": "0", "update_count": "0",
+                "campaign_requirements": campaign["evidence_requirements"],
+                "threshold_score": campaign["threshold_score"],
+                "original_evidence_and_accepted_assessment": original,
+                "challenge_evidence": {"challenge_url": challenge_url, "reason": reason},
+                "already_claimed": submission["claimed"],
             })
-        d = json.loads(raw)
-        d["exists"] = "true"
-        d["address"] = address
-        d["username"] = self.usernames.get(address, "Unknown")
-        return json.dumps(d)
+
+        raw = gl.eq_principle.prompt_non_comparative(
+            get_input,
+            task=(
+                "Compare the complete original evidence record and its accepted assessment against the challenge source identifier and reason. "
+                "Return strict JSON only with verdict (UPHOLD, REDUCE_SCORE, INCREASE_SCORE, INVALIDATE, or NEEDS_MORE_EVIDENCE), "
+                "revised_score 0-100, revised_decision (QUALIFIED, NOT_QUALIFIED, or INVALID), confidence, reasoning, "
+                "accepted_challenge_sources array, rejected_challenge_sources array, and risk_flags array. "
+                "Do not assume URL ownership or invent page contents. A challenge may revise eligibility but cannot claw back an already scheduled payout."
+            ),
+            criteria=(
+                "Accept only valid JSON with allowed enums and bounded score. Reasoning must explicitly compare original evidence with counter-evidence, "
+                "explain source acceptance/rejection, preserve the prior result when counter-evidence is insufficient, and avoid identity-proof claims."
+            ),
+        )
+        outcome = _challenge_result(raw, previous_score, previous_decision)
+        was_qualified = submission["eligible_to_claim"]
+        submission["score"] = outcome["revised_score"]
+        submission["decision"] = outcome["revised_decision"]
+        if not submission["claimed"]:
+            submission["eligible_to_claim"] = (
+                outcome["revised_decision"] == "QUALIFIED"
+                and outcome["revised_score"] >= _integer(campaign["threshold_score"])
+            )
+        submission["challenge_count"] += 1
+        submission["last_challenged_at"] = _now()
+        if outcome["revised_score"] != previous_score or outcome["revised_decision"] != previous_decision:
+            submission["revision_count"] += 1
+        if was_qualified != submission["eligible_to_claim"]:
+            if submission["eligible_to_claim"]:
+                campaign["qualified_count"] += 1
+            else:
+                campaign["qualified_count"] = max(0, _integer(campaign["qualified_count"]) - 1)
+
+        challenge_id = str(submission["challenge_count"])
+        challenge = {
+            "version": "v9",
+            "campaign_id": campaign_id,
+            "submission_id": submission_id,
+            "challenge_id": challenge_id,
+            "challenger": challenger,
+            "challenge_url": _clean(challenge_url, 500),
+            "reason": _clean(reason, 1600),
+            "previous_score": previous_score,
+            "previous_decision": previous_decision,
+            **outcome,
+            "claimed_before_challenge": submission["claimed"],
+            "settlement_effect": "RECORDED_NO_CLAWBACK" if submission["claimed"] else "ELIGIBILITY_RECOMPUTED",
+            "created_at": _now(),
+        }
+        key = campaign_id + ":" + submission_id
+        self.challenges[key + ":" + challenge_id] = json.dumps(challenge)
+        ids = json.loads(self.challenge_ids.get(key, "[]"))
+        ids.append(challenge_id)
+        self.challenge_ids[key] = json.dumps(ids)
+        self.submissions[key] = json.dumps(submission)
+        self.campaigns[campaign_id] = json.dumps(campaign)
+        self.challenge_count += 1
+        self._rank(submission)
+
+    @gl.public.write
+    def close_campaign(self, campaign_id: str) -> None:
+        campaign = self._campaign(campaign_id)
+        assert str(gl.message.sender_address) == campaign["creator"], "Only the creator can close."
+        assert campaign["status"] in ["OPEN", "EXHAUSTED"], "Campaign already closed."
+        assert _now() > _integer(campaign["deadline"]), "Campaign deadline has not passed."
+        refund = _integer(campaign["remaining_pool"])
+        campaign["remaining_pool"] = "0"
+        campaign["status"] = "CLOSED"
+        campaign["closed_at"] = _now()
+        campaign["refund_status"] = "NONE" if refund == 0 else "SCHEDULED_FOR_FINALIZATION"
+        self.campaigns[campaign_id] = json.dumps(campaign)
+        if refund > 0:
+            self.total_locked_wei = str(max(0, _integer(self.total_locked_wei) - refund))
+            self.total_refunded_wei = str(_integer(self.total_refunded_wei) + refund)
+            _Recipient(Address(campaign["creator"])).emit_transfer(value=u256(refund))
 
     @gl.public.view
-    def get_leaderboard(self) -> str:
+    def get_campaign(self, campaign_id: str) -> str:
+        raw = self.campaigns.get(campaign_id, None)
+        return raw if raw is not None else json.dumps({"exists": False, "campaign_id": campaign_id})
+
+    @gl.public.view
+    def list_campaigns(self) -> str:
         result = []
-        for raw in self.leaderboard:
-            try:
+        for campaign_id in self.campaign_ids:
+            raw = self.campaigns.get(campaign_id, None)
+            if raw is not None:
                 result.append(json.loads(raw))
-            except:
-                pass
+        return json.dumps(result)
+
+    @gl.public.view
+    def get_submission(self, campaign_id: str, submission_id: str) -> str:
+        raw = self.submissions.get(campaign_id + ":" + submission_id, None)
+        return raw if raw is not None else json.dumps({"exists": False, "campaign_id": campaign_id, "submission_id": submission_id})
+
+    @gl.public.view
+    def list_submissions(self, campaign_id: str) -> str:
+        result = []
+        for submission_id in json.loads(self.submission_ids.get(campaign_id, "[]")):
+            raw = self.submissions.get(campaign_id + ":" + submission_id, None)
+            if raw is not None:
+                result.append(json.loads(raw))
+        return json.dumps(result)
+
+    @gl.public.view
+    def get_challenge(self, campaign_id: str, submission_id: str, challenge_id: str) -> str:
+        raw = self.challenges.get(campaign_id + ":" + submission_id + ":" + challenge_id, None)
+        return raw if raw is not None else json.dumps({"exists": False, "challenge_id": challenge_id})
+
+    @gl.public.view
+    def list_challenges(self, campaign_id: str, submission_id: str) -> str:
+        key = campaign_id + ":" + submission_id
+        result = []
+        for challenge_id in json.loads(self.challenge_ids.get(key, "[]")):
+            raw = self.challenges.get(key + ":" + challenge_id, None)
+            if raw is not None:
+                result.append(json.loads(raw))
         return json.dumps(result)
 
     @gl.public.view
     def get_stats(self) -> str:
         return json.dumps({
-            "total_profiles": self.total_profiles or "0",
-            "leaderboard_size": str(len(self.leaderboard)),
-            "contract_version": "v8",
+            "contract_version": "v9",
+            "campaigns": self.campaign_count,
+            "submissions": self.submission_count,
+            "challenges": self.challenge_count,
+            "claims_scheduled": self.claimed_count,
+            "total_locked_wei": self.total_locked_wei,
+            "total_funded_wei": self.total_funded_wei,
+            "total_claimed_wei": self.total_claimed_wei,
+            "total_refunded_wei": self.total_refunded_wei,
         })
 
     @gl.public.view
-    def has_score(self, address: str) -> str:
-        return "true" if self.scores.get(address, None) is not None else "false"
+    def get_leaderboard(self) -> str:
+        return json.dumps([json.loads(item) for item in self.leaderboard])
+
+    @gl.public.view
+    def list_top_scores(self) -> str:
+        return json.dumps([json.loads(item) for item in self.leaderboard])

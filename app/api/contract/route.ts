@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { BRADBURY_RPC, PROOFSCORE_CONTRACT_ADDRESS } from '@/lib/config'
+import { BRADBURY_RPC, PROOFSCORE_CONTRACT_ADDRESS, PROOFSCORE_IS_CONFIGURED } from '@/lib/config'
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/
 const READ_TRANSACTION_HASH_VARIANT = 'latest-nonfinal'
 
 const READ_METHODS = {
-  get_score: { args: 1, addressArgs: [0] },
+  get_campaign: { args: 1, addressArgs: [] },
+  list_campaigns: { args: 0, addressArgs: [] },
+  get_submission: { args: 2, addressArgs: [] },
+  list_submissions: { args: 1, addressArgs: [] },
+  get_challenge: { args: 3, addressArgs: [] },
+  list_challenges: { args: 2, addressArgs: [] },
   get_leaderboard: { args: 0, addressArgs: [] },
+  list_top_scores: { args: 0, addressArgs: [] },
   get_stats: { args: 0, addressArgs: [] },
-  has_score: { args: 1, addressArgs: [0] },
 } as const
 
 type ReadMethod = keyof typeof READ_METHODS
@@ -28,6 +33,9 @@ function parseArgs(argsParam: string | null) {
 }
 
 export async function GET(req: NextRequest) {
+  if (!PROOFSCORE_IS_CONFIGURED) {
+    return NextResponse.json({ ok: false, error: 'ProofScore v9 contract address is not configured.' }, { status: 503 })
+  }
   const method = req.nextUrl.searchParams.get('method') ?? ''
   const argsParam = req.nextUrl.searchParams.get('args')
 
