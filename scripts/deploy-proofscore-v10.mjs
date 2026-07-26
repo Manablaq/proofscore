@@ -24,7 +24,25 @@ const address = receipt.recipient
 if (!/^0x[0-9a-fA-F]{40}$/.test(address ?? '') || /^0x0{40}$/i.test(address)) {
   throw new Error('Deployment was accepted but no usable contract address was returned. Inspect the transaction; do not retry blindly.')
 }
-const raw = await client.readContract({ address, functionName: 'get_stats', args: [], stateStatus: 'accepted' })
-const stats = typeof raw === 'string' ? JSON.parse(raw) : raw
-if (stats?.contract_version !== 'v10') throw new Error('get_stats did not return v10. Do not configure the frontend.')
-console.log(JSON.stringify({ version: 'v10', deployTransactionHash: hash, contractAddress: address, getStats: stats, next: `Set NEXT_PUBLIC_PROOFSCORE_V10_ADDRESS=${address}; wait for FINALIZED before claiming production proof.` }, null, 2))
+let stats = null
+let readError = null
+// Consensus can accept a deployment before a public GenVM RPC has caught up.
+// Preserve the one submitted transaction and report that state; never invite a
+// blind redeploy merely because an immediate read is unavailable.
+for (let attempt = 0; attempt < 12; attempt += 1) {
+  try {
+    const raw = await client.readContract({ address, functionName: 'get_stats', args: [], stateStatus: 'accepted' })
+    const candidate = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (candidate?.contract_version === 'v10') { stats = candidate; break }
+    readError = 'get_stats returned an unexpected contract version.'
+  } catch (error) {
+    readError = error instanceof Error ? error.shortMessage ?? error.message : String(error)
+  }
+  await new Promise(resolve => setTimeout(resolve, 10_000))
+}
+console.log(JSON.stringify({
+  version: 'v10', deployTransactionHash: hash, contractAddress: address, getStats: stats,
+  state: stats ? 'ACCEPTED_AND_READABLE' : 'ACCEPTED_EXECUTION_CONFIRMED_RPC_SYNC_PENDING',
+  rpcReadError: stats ? null : readError,
+  next: stats ? `Set NEXT_PUBLIC_PROOFSCORE_V10_ADDRESS=${address}; wait for FINALIZED before claiming production proof.` : `Do not redeploy. Recheck ${address} after the public GenVM RPC syncs.`,
+}, null, 2))
