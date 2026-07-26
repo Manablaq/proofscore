@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { BRADBURY_RPC, PROOFSCORE_CONTRACT_ADDRESS, PROOFSCORE_IS_CONFIGURED } from '@/lib/config'
+import { BRADBURY_RPC, PROOFSCORE_CONTRACT_ADDRESS, PROOFSCORE_IS_CONFIGURED, PROOFSCORE_V10_CONTRACT_ADDRESS, PROOFSCORE_V10_IS_CONFIGURED } from '@/lib/config'
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/
 const READ_TRANSACTION_HASH_VARIANT = 'latest-nonfinal'
@@ -13,6 +13,14 @@ const READ_METHODS = {
   list_challenges: { args: 2, addressArgs: [] },
   get_leaderboard: { args: 0, addressArgs: [] },
   list_top_scores: { args: 0, addressArgs: [] },
+  get_stats: { args: 0, addressArgs: [] },
+} as const
+
+const V10_READ_METHODS = {
+  get_campaign: { args: 1, addressArgs: [] },
+  list_campaigns: { args: 0, addressArgs: [] },
+  get_submission: { args: 2, addressArgs: [] },
+  list_submissions: { args: 1, addressArgs: [] },
   get_stats: { args: 0, addressArgs: [] },
 } as const
 
@@ -33,13 +41,15 @@ function parseArgs(argsParam: string | null) {
 }
 
 export async function GET(req: NextRequest) {
-  if (!PROOFSCORE_IS_CONFIGURED) {
-    return NextResponse.json({ ok: false, error: 'ProofScore v9 contract address is not configured.' }, { status: 503 })
-  }
+  const version = req.nextUrl.searchParams.get('version') === 'v10' ? 'v10' : 'v9'
+  const configured = version === 'v10' ? PROOFSCORE_V10_IS_CONFIGURED : PROOFSCORE_IS_CONFIGURED
+  const contractAddress = version === 'v10' ? PROOFSCORE_V10_CONTRACT_ADDRESS : PROOFSCORE_CONTRACT_ADDRESS
+  const methods = version === 'v10' ? V10_READ_METHODS : READ_METHODS
+  if (!configured) return NextResponse.json({ ok: false, error: `ProofScore ${version} contract address is not configured.` }, { status: 503 })
   const method = req.nextUrl.searchParams.get('method') ?? ''
   const argsParam = req.nextUrl.searchParams.get('args')
 
-  if (!(method in READ_METHODS)) {
+  if (!(method in methods)) {
     return NextResponse.json({ ok: false, error: 'Unsupported contract read method.' }, { status: 400 })
   }
 
@@ -48,7 +58,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: args.error }, { status: 400 })
   }
 
-  const spec = READ_METHODS[method as ReadMethod]
+  const spec = methods[method as keyof typeof methods]
   if (args.length !== spec.args) {
     return NextResponse.json({ ok: false, error: `Expected ${spec.args} args for ${method}.` }, { status: 400 })
   }
@@ -78,7 +88,7 @@ export async function GET(req: NextRequest) {
     const chain = { ...testnetBradbury, rpcUrls: { default: { http: [BRADBURY_RPC] } } } as any
     const client = createClient({ chain, fetch: bradburyFetch } as any)
     const raw = await (client as any).readContract({
-      address: PROOFSCORE_CONTRACT_ADDRESS,
+      address: contractAddress,
       functionName: method,
       args,
       transactionHashVariant: READ_TRANSACTION_HASH_VARIANT,
