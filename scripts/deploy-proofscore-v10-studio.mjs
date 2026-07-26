@@ -18,10 +18,14 @@ const hash = await client.deployContract({ code })
 console.log(`Submitted v10 Studionet deployment: ${hash}`)
 
 const receipt = await client.waitForTransactionReceipt({ hash, status: TransactionStatus.ACCEPTED, interval: 2_000, retries: 90 })
-if (receipt.txExecutionResultName !== 'FINISHED_WITH_RETURN') {
-  throw new Error(`Studionet deployment did not execute successfully: ${receipt.txExecutionResultName ?? 'UNKNOWN'}.`)
+// Studionet returns snake_case receipt fields and does not currently populate
+// txExecutionResultName.  Its consensus status plus a successful read below is
+// the reliable deployment check for this environment.
+const statusName = receipt.statusName ?? receipt.status_name
+if (statusName !== TransactionStatus.ACCEPTED && statusName !== TransactionStatus.FINALIZED) {
+  throw new Error(`Studionet deployment was not accepted: ${statusName ?? 'UNKNOWN'}.`)
 }
-const address = receipt.recipient
+const address = receipt.data?.contract_address ?? receipt.recipient
 if (!/^0x[0-9a-fA-F]{40}$/.test(address ?? '') || /^0x0{40}$/i.test(address)) {
   throw new Error('Studionet deployment was accepted but returned no usable contract address.')
 }
