@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "deploy:v9": "node scripts/deploy-proofscore-v9.mjs",
     "deploy:v10": "node scripts/deploy-proofscore-v10.mjs",
+    "deploy:v10:studio": "node scripts/deploy-proofscore-v10-studio.mjs",
     "diagnose:v9": "node scripts/diagnose-v9-deploy.mjs",
     "smoke:v9": "node scripts/smoke-proofscore-v9.mjs"
   },
