@@ -5,6 +5,7 @@ import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { useAccount } from 'wagmi'
 import { formatEther, parseEther } from 'viem'
 import { BRADBURY_CHAIN_ID, BRADBURY_EXPLORER, BRADBURY_RPC, PROOFSCORE_CONTRACT_ADDRESS, PROOFSCORE_IS_CONFIGURED } from '@/lib/config'
+import VerifiedEvidenceWorkflow from '@/components/VerifiedEvidenceWorkflow'
 
 type Campaign = {
   campaign_id: string; creator: string; title: string; description: string
@@ -381,19 +382,21 @@ export default function Home() {
 
   return <main>
     <div className="aurora aurora-one" /><div className="aurora aurora-two" />
-    <nav className="top-nav"><div className="nav-shell"><a className="brand" href="#overview"><span>PS</span> ProofScore <em>v9</em></a><div className="nav-links" aria-label="Primary navigation"><a href="#overview">Overview</a><a href="#campaigns">Campaigns</a><a href="#submit-evidence">Submit Evidence</a><a href="#challenge">Challenge</a><a href="#claim">Claim</a><a href="#deployment-proof">Deployment Proof</a></div><div className="wallet-control"><ConnectButton /></div></div></nav>
+    <nav className="top-nav"><div className="nav-shell"><a className="brand" href="#overview"><span>PS</span> ProofScore</a><div className="nav-links" aria-label="Primary navigation"><a href="#overview">Overview</a><a href="#verified-workflow">Verified Evidence</a><a href="#campaigns">Campaigns</a><a href="#submit-evidence">Submit Evidence</a><a href="#deployment-proof">Deployment Proof</a></div><div className="wallet-control"><ConnectButton /></div></div></nav>
 
     <section className="hero" id="overview">
       <div className="hero-copy"><div className="eyebrow"><i /> LIVE ON GENLAYER BRADBURY</div>
       <h1>Evidence-settled<br /><span>builder bounties.</span></h1>
-      <p>Evidence-settled builder bounty protocol on GenLayer. Sponsors fund outcomes, canonical scores gate eligibility, and every decision remains contestable.</p>
-      <div className="hero-actions"><a className="button primary" href="#create">Create Campaign</a><a className="button secondary" href="#submit-evidence">Submit Builder Evidence</a><a className="button ghost" href="#dashboard">View Live Contract State</a></div></div>
+      <p>Evidence-settled builder bounty protocol on GenLayer. Sponsors fund outcomes, wallet-bound public proofs establish account control, and validator consensus adjudicates evidence quality.</p>
+      <div className="hero-actions"><a className="button primary" href="#verified-workflow">Create verified campaign</a><a className="button secondary" href="#verified-workflow">Submit verified evidence</a><a className="button ghost" href="#dashboard">View Live Contract State</a></div></div>
       <aside className="contract-card">{PROOFSCORE_IS_CONFIGURED ? <><div className="contract-card-head"><span className="live-pulse" /> <strong>{isV9Live ? 'v9 live' : 'Contract configured'}</strong><span>Bradbury testnet</span></div><small>{isV9Live ? 'CONFIRMED V9 CONTRACT' : 'CONFIGURED CONTRACT'}</small><code>{PROOFSCORE_CONTRACT_ADDRESS}</code><div className="contract-meta"><span>Evidence scoring</span><b>Contestable settlement</b></div><a href={`${BRADBURY_EXPLORER}/address/${PROOFSCORE_CONTRACT_ADDRESS}`} target="_blank" rel="noreferrer">Inspect contract ↗</a></> : <><div className="contract-card-head preview"><strong>Preview mode</strong><span>Live reads disabled</span></div><small>CONTRACT CONFIGURATION</small><div className="config-empty">No v9 contract configured</div><p className="config-copy">Set NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS to enable live reads and writes.</p></>}</aside>
       <div className="flow">
         {['Sponsor locks reward', 'Builder submits evidence', 'Score gates eligibility', 'Challenge can reduce / deny', 'Qualified builder claims'].map((step, index) => <div key={step}><b>0{index + 1}</b><span>{step}</span>{index < 4 && <i>→</i>}</div>)}
       </div>
-      <p className="truth-note">Evidence-backed reputation assessment. ProofScore does not prove identity or ownership of submitted profiles.</p>
+      <p className="truth-note">V10 verifies wallet control of a public challenge resource—not legal identity—and records validator-consensus quality judgements rather than claiming objective universal quality.</p>
     </section>
+
+    <VerifiedEvidenceWorkflow />
 
     {!PROOFSCORE_IS_CONFIGURED && <section className="config-warning"><strong>V9 preview mode</strong><span>No v9 address is configured, so writes and live reads are disabled. Deploy separately and set <code>NEXT_PUBLIC_PROOFSCORE_V9_ADDRESS</code>.</span></section>}
     <TxNotice state={tx} />{error && <div className="error">{error}</div>}
