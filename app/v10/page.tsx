@@ -30,6 +30,7 @@ type Submission = {
   submission_id: string
   builder: string
   handle: string
+  proof_url: string
   verification_token: string
   verification_expires_at: number
   account_control: string
@@ -287,6 +288,16 @@ export default function ProofScoreV10() {
             <button className="v10-primary" disabled={!isConnected || !selectedCampaignId || Boolean(submittingMethod || pendingAction)}>{submittingMethod === 'submit_evidence' ? 'Submitting evidence…' : pendingAction?.method === 'submit_evidence' ? 'Awaiting accepted state…' : 'Create evidence record'}</button>
           </form>
         </section>
+
+        {selectedCampaign && <section className="v10-submission-state" aria-live="polite">
+          <header><div><span>ACCEPTED EVIDENCE RECORDS</span><h2>{selectedCampaign.title}</h2></div><b>{submissions.length} {submissions.length === 1 ? 'record' : 'records'}</b></header>
+          {submissions.length === 0 ? <p className="submission-state-empty">No accepted evidence records yet. A submitted transaction will appear here automatically once GenLayer consensus accepts it.</p> : <div className="submission-state-grid">{submissions.map((submission) => <article className={submission.builder.toLowerCase() === address?.toLowerCase() ? 'mine' : ''} key={submission.submission_id}>
+            <div><span className={`v10-status ${submission.account_control === 'PENDING' ? 'pending' : 'open'}`}>{displayStatus(submission.account_control)}</span><small>SUBMISSION #{submission.submission_id}</small></div>
+            <h3>{submission.handle || shortAddress(submission.builder)} {submission.builder.toLowerCase() === address?.toLowerCase() && <em>Your record</em>}</h3>
+            <p>Quality: <b>{displayStatus(submission.quality_status)}</b> · Verdict: <b>{submission.verdict || 'PENDING'}</b></p>
+            <footer><a href={submission.proof_url} target="_blank" rel="noreferrer">Proof resource ↗</a>{submission.builder.toLowerCase() === address?.toLowerCase() && <a href="#verification">Continue verification →</a>}</footer>
+          </article>)}</div>}
+        </section>}
 
         <section className="v10-section" id="verification">
           <header className="v10-section-heading"><div><span>03 / VERIFY</span><h2>Your verification state</h2></div>{selectedCampaign && <small>Campaign #{selectedCampaign.campaign_id}</small>}</header>
