@@ -108,7 +108,10 @@ export default function ProofScoreV10() {
     setLoading(true)
     try {
       const nextCampaigns = await readContract('list_campaigns') as Campaign[]
-      const id = requestedCampaignId ?? selectedCampaignId ?? nextCampaigns[0]?.campaign_id ?? ''
+      // An empty string means no selection yet, so default to the first campaign.
+      // Using nullish coalescing here would preserve an empty string and make the
+      // workspace look as if no accepted evidence exists after a page load.
+      const id = requestedCampaignId || selectedCampaignId || nextCampaigns[0]?.campaign_id || ''
       setCampaigns(nextCampaigns)
       setSelectedCampaignId(id)
       const nextSubmissions = id ? await readContract('list_submissions', [id]) as Submission[] : []
