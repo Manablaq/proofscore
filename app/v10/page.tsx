@@ -44,8 +44,10 @@ type Submission = {
 
 type Notice = { tone: 'success' | 'error' | 'info'; text: string } | null
 type PendingAction = { method: string; hash: string; startedAt: number; campaignCount: number; contractAddress: string }
-type TransactionStatus = { status: string; statusCode: number; executionResult: number | null }
+type TransactionStatus = { status: string; statusCode: number; executionResult: number | null; executionResultName: string | null }
+type ProofPreflight = { state: 'idle' | 'checking' | 'passed' | 'failed'; detail: string; token?: string }
 const PENDING_ACTION_KEY = 'proofscore-v10-pending-action'
+const FINISHED_WITH_ERROR = 2
 
 async function readContract(method: string, args: unknown[] = []) {
   const response = await fetch(
@@ -101,6 +103,7 @@ export default function ProofScoreV10() {
   const [notice, setNotice] = useState<Notice>(null)
   const [submittingMethod, setSubmittingMethod] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
+  const [proofPreflight, setProofPreflight] = useState<ProofPreflight>({ state: 'idle', detail: '' })
   const submitFormRef = useRef<HTMLFormElement>(null)
 
   const selectedCampaign = campaigns.find((campaign) => campaign.campaign_id === selectedCampaignId)
@@ -108,6 +111,8 @@ export default function ProofScoreV10() {
     () => submissions.find((submission) => submission.builder.toLowerCase() === address?.toLowerCase()),
     [address, submissions],
   )
+
+  const isProofPreflightPassed = proofPreflight.state === 'passed' && proofPreflight.token === ownSubmission?.verification_token
 
   const refresh = useCallback(async (requestedCampaignId?: string) => {
     if (!PROOFSCORE_V10_IS_CONFIGURED) return
@@ -169,11 +174,14 @@ export default function ProofScoreV10() {
     const checkState = async () => {
       const status = await readTransactionStatus(pendingAction.hash)
       const normalizedStatus = status.status.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()
-      if (status.executionResult === 2) {
+      if (status.executionResult === FINISHED_WITH_ERROR) {
         if (!cancelled) {
           setPendingAction(null)
           window.localStorage.removeItem(PENDING_ACTION_KEY)
-          setNotice({ tone: 'error', text: 'GenLayer accepted consensus on an execution error. No contract state changed; review the error before retrying.' })
+          const nextStep = pendingAction.method === 'verify_account_control'
+            ? 'The control check failed: publish the exact token at the Proof URL, use “Check published proof”, then try again.'
+            : 'The contract rejected this action. No state changed; review the action requirements before retrying.'
+          setNotice({ tone: 'error', text: `GenLayer reached consensus, but contract execution returned FINISHED_WITH_ERROR. ${nextStep}` })
         }
         return
       }
@@ -203,6 +211,10 @@ export default function ProofScoreV10() {
       setNotice({ tone: 'info', text: 'Connect your wallet to submit a transaction.' })
       return
     }
+    if (method === 'verify_account_control' && !isProofPreflightPassed) {
+      setNotice({ tone: 'error', text: 'Check the published Proof URL first. The wallet transaction is disabled until the exact active token is found.' })
+      return
+    }
     setSubmittingMethod(method)
     setNotice({ tone: 'info', text: 'Confirm the transaction in your wallet. The app will continue as soon as it is submitted.' })
     try {
@@ -215,6 +227,31 @@ export default function ProofScoreV10() {
       setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'Transaction could not be submitted.' })
     } finally {
       setSubmittingMethod(null)
+    }
+  }
+
+  async function checkPublishedProof() {
+    if (!ownSubmission) return
+    setProofPreflight({ state: 'checking', detail: 'Fetching the submitted Proof URL…' })
+    try {
+      const response = await fetch('/api/proof-preflight', { method: 'POST', headers: { 'content-type': 'application/json' }, cache: 'no-store', body: JSON.stringify({ proofUrl: ownSubmission.proof_url, token: ownSubmission.verification_token }) })
+      const payload = await response.json()
+      if (!response.ok || !payload.ok) throw new Error(payload.error ?? 'The Proof URL could not be checked.')
+      if (!payload.found) throw new Error('The exact active token was not found at this URL.')
+      setProofPreflight({ state: 'passed', token: ownSubmission.verification_token, detail: `Exact token found at ${payload.finalUrl}. You can now submit the on-chain control check.` })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'The Proof URL could not be checked.'
+      setProofPreflight({ state: 'failed', detail: `${detail} Publish the token, then check again before signing.` })
+    }
+  }
+
+  async function copyProofToken() {
+    if (!ownSubmission) return
+    try {
+      await navigator.clipboard.writeText(ownSubmission.verification_token)
+      setNotice({ tone: 'success', text: 'Active verification token copied. Publish it verbatim at the submitted Proof URL.' })
+    } catch {
+      setNotice({ tone: 'info', text: 'Select and copy the active verification token manually.' })
     }
   }
 
@@ -351,7 +388,13 @@ export default function ProofScoreV10() {
           {!address ? <div className="v10-empty"><strong>Connect the submitting wallet</strong><p>Your active evidence record and available actions will appear here.</p></div> : !ownSubmission ? <div className="v10-empty"><strong>No record for this wallet</strong><p>Submit evidence to the selected campaign to start a verification flow.</p></div> : <div className="v10-verification-card">
             <div className="verification-state"><span className="v10-status pending">{displayStatus(ownSubmission.account_control)}</span><h3>Public-control challenge</h3><p>Publish this exact token at your submitted Proof URL, then request verification before it expires.</p><code>{ownSubmission.verification_token}</code><small>Expires {new Date(ownSubmission.verification_expires_at * 1000).toLocaleString()}</small></div>
             <div className="verification-actions"><div className="action-progress"><span className={ownSubmission.account_control === 'CONTROL_VERIFIED' ? 'done' : ''}>1</span><p><b>Control</b><small>{displayStatus(ownSubmission.account_control)}</small></p><i /><span className={ownSubmission.quality_status !== 'NOT_REQUESTED' ? 'done' : ''}>2</span><p><b>Evidence</b><small>{displayStatus(ownSubmission.quality_status)}</small></p></div>
-              <button className="v10-secondary" disabled={!isConnected || ownSubmission.account_control !== 'PENDING' || Boolean(submittingMethod || pendingAction)} onClick={() => void run('verify_account_control', [selectedCampaignId, ownSubmission.submission_id])}>{submittingMethod === 'verify_account_control' ? 'Submitting verification…' : pendingAction?.method === 'verify_account_control' ? 'Verifying automatically…' : 'Verify public control'}</button>
+              {ownSubmission.account_control === 'PENDING' && <div className="v10-proof-preflight">
+                <div><span>STEP 1 · PUBLISH AND CHECK</span><p>Publish the exact token at the Proof URL, then check it before signing. This prevents a known failed transaction; the contract remains the final authority.</p></div>
+                <div className="v10-proof-token"><code>{ownSubmission.verification_token}</code><button type="button" className="v10-text-button" onClick={() => void copyProofToken()}>Copy token</button><a href={ownSubmission.proof_url} target="_blank" rel="noreferrer">Open Proof URL ↗</a></div>
+                <button type="button" className="v10-secondary" disabled={proofPreflight.state === 'checking' || Boolean(submittingMethod || pendingAction)} onClick={() => void checkPublishedProof()}>{proofPreflight.state === 'checking' ? 'Checking public proof…' : isProofPreflightPassed ? 'Check passed · check again' : 'Check published proof'}</button>
+                {proofPreflight.state !== 'idle' && <p className={`v10-preflight-result ${proofPreflight.state}`}>{proofPreflight.detail}</p>}
+              </div>}
+              <button className="v10-secondary" disabled={!isConnected || ownSubmission.account_control !== 'PENDING' || !isProofPreflightPassed || Boolean(submittingMethod || pendingAction)} onClick={() => void run('verify_account_control', [selectedCampaignId, ownSubmission.submission_id])}>{submittingMethod === 'verify_account_control' ? 'Submitting verification…' : pendingAction?.method === 'verify_account_control' ? 'Verifying automatically…' : isProofPreflightPassed ? 'Verify public control' : 'Check proof to continue'}</button>
               <button className="v10-secondary" disabled={!isConnected || ownSubmission.account_control !== 'CONTROL_VERIFIED' || ownSubmission.quality_status !== 'NOT_REQUESTED' || Boolean(submittingMethod || pendingAction)} onClick={() => void run('adjudicate_quality', [selectedCampaignId, ownSubmission.submission_id])}>{submittingMethod === 'adjudicate_quality' ? 'Submitting verdict request…' : pendingAction?.method === 'adjudicate_quality' ? 'Checking consensus…' : 'Request evidence verdict'}</button>
               {ownSubmission.eligible_to_claim && !ownSubmission.claimed && <button className="v10-primary" disabled={Boolean(submittingMethod || pendingAction)} onClick={() => void run('claim_reward', [selectedCampaignId, ownSubmission.submission_id])}>{submittingMethod === 'claim_reward' ? 'Submitting claim…' : pendingAction?.method === 'claim_reward' ? 'Awaiting accepted state…' : 'Claim verified reward'}</button>}
               <div className="v10-verdict"><span>VERDICT</span><strong>{ownSubmission.verdict || 'Pending'}</strong><b>{ownSubmission.score || 0}/100</b><p>{ownSubmission.rationale || 'A validator rationale will appear after evidence adjudication.'}</p></div>
