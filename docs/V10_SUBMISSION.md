@@ -7,7 +7,7 @@ and documentation evidence for decentralized evaluation against a fixed rubric.
 Only a consensus-accepted verdict may schedule a reward transfer.
 
 Use the concise [public v10 evidence dossier](V10_EVIDENCE.md) as the
-documentation URL for live quality-adjudication tests.
+documentation URL for live evidence-adjudication tests.
 
 ## Exact guarantees
 
@@ -17,31 +17,28 @@ documentation URL for live quality-adjudication tests.
   expiry-bound challenge token at the submitted HTTPS proof URL. Validators
   independently fetch the URL and require the exact token before marking the
   record `CONTROL_VERIFIED`.
-- **Quality decision:** validators independently evaluate one concise, public
-  evidence dossier against fixed criteria: functionality (25), meaningful
-  GenLayer integration (30), real-world use (20), documentation/reproducibility
-  (15), and originality/reuse potential (10). The dossier links the stored
-  repository and product references. An `ACCEPTED` result needs a total of at
-  least 70.
+- **Evidence decision:** validators independently fetch one concise, public
+  evidence dossier and derive fixed signals: repository link present (25),
+  product link present (25), GenLayer mentioned (20), wallet-control flow
+  described (15), and deployment evidence present (15). An `ACCEPTED` result
+  needs a total of at least 70.
 
 ## Claims we do not make
 
 - A public-resource challenge is not legal or government identity verification.
 - A verdict is not an objective universal proof of quality. It is a transparent,
-  decentralized judgment against the published rubric and available evidence.
+  decentralized evidence-completeness judgment against the published rubric.
 - The contract never stores fetched page prose or hidden reasoning. It stores the
   agreed structured result and concise rationale only.
 
 ## Security model
 
 Evidence URLs are HTTPS-only and bounded. The documentation URL is the concise
-quality dossier; repository and product URLs are preserved as reference links.
-Rendered dossier text is untrusted data, and the quality prompt explicitly
-ignores instructions inside it. Each quality result is normalized to fixed
-per-criterion ranges, a valid verdict, and an acceptance threshold. Validators
-independently assess the dossier and must agree on the verdict with a bounded
-total-score difference. Any malformed result, failed fetch, expired challenge,
-or lack of consensus prevents payout eligibility.
+evidence dossier; repository and product URLs are checked as exact public links.
+The fetched dossier is untrusted data and only explicit Boolean signals are
+derived from it. Validators independently fetch the same dossier and strict-match
+the canonical signal set. Any failed fetch, expired challenge, or insufficient
+signal score prevents payout eligibility.
 
 ## Required live proof before Portal submission
 
@@ -52,7 +49,7 @@ or lack of consensus prevents payout eligibility.
 2. Create a funded campaign.
 3. Submit evidence from a wallet, then publish the generated token at the public
    proof URL.
-4. Finalize account-control verification, quality adjudication, and the reward
+4. Finalize account-control verification, evidence adjudication, and the reward
    claim on Bradbury.
 5. Record contract address and finalized transaction links in this document and
    the project submission.
