@@ -1,4 +1,16 @@
-# ProofScore v9
+# ProofScore
+
+## Public v10 verification proof
+
+This repository is the public proof resource for ProofScore v10 campaign `1`, submission `1`.
+
+```text
+PROOFSCORE-V10|1|1|0x9129ae44e70eefD31D467692fc70c56c5ec6a978|1785409200
+```
+
+The token above is a one-time, wallet-bound public-control challenge. It proves control of this submitted resource for the stated verification window; it is not a claim of legal identity or universal quality.
+
+## Legacy v9 documentation
 
 ProofScore is a GenLayer-native, evidence-settled builder bounty protocol: **reputation that settles rewards**. A sponsor locks a GEN reward pool and sets a minimum score. Builders submit public evidence identifiers, the contract computes a canonical score, and only an accepted qualifying submission unlocks a reward claim. Counter-evidence challenges remain in the on-chain audit trail without persisting validator-variable prose.
 
