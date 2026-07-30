@@ -5,7 +5,7 @@
 This repository is the public proof resource for ProofScore v10 campaign `1`, submission `1`.
 
 ```text
-PROOFSCORE-V10|1|1|0x9129ae44e70eefd31d467692fc70c56c5ec6a978|1785452400
+PROOFSCORE-V10|1|1|0x5bb49021001200fe8156a81c7fcf097e535e7181|1785495600
 ```
 
 The token above is a one-time, wallet-bound public-control challenge. It proves control of this submitted resource for the stated verification window; it is not a claim of legal identity or universal quality.
