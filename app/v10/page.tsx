@@ -43,8 +43,8 @@ type Submission = {
 }
 
 type Notice = { tone: 'success' | 'error' | 'info'; text: string } | null
-type PendingAction = { method: string; hash: string; startedAt: number; campaignCount: number }
-type TransactionStatus = { status: string; statusCode: number }
+type PendingAction = { method: string; hash: string; startedAt: number; campaignCount: number; contractAddress: string }
+type TransactionStatus = { status: string; statusCode: number; executionResult: number | null }
 const PENDING_ACTION_KEY = 'proofscore-v10-pending-action'
 
 async function readContract(method: string, args: unknown[] = []) {
@@ -141,8 +141,10 @@ export default function ProofScoreV10() {
       const saved = window.localStorage.getItem(PENDING_ACTION_KEY)
       if (!saved) return
       const pending = JSON.parse(saved) as PendingAction
-      if (pending?.method && pending?.hash && Number.isFinite(pending.startedAt)) {
+      if (pending?.method && pending?.hash && Number.isFinite(pending.startedAt) && pending.contractAddress?.toLowerCase() === PROOFSCORE_V10_CONTRACT_ADDRESS.toLowerCase()) {
         timer = window.setTimeout(() => setPendingAction(pending), 0)
+      } else {
+        window.localStorage.removeItem(PENDING_ACTION_KEY)
       }
     } catch {
       window.localStorage.removeItem(PENDING_ACTION_KEY)
@@ -167,6 +169,14 @@ export default function ProofScoreV10() {
     const checkState = async () => {
       const status = await readTransactionStatus(pendingAction.hash)
       const normalizedStatus = status.status.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()
+      if (status.executionResult === 2) {
+        if (!cancelled) {
+          setPendingAction(null)
+          window.localStorage.removeItem(PENDING_ACTION_KEY)
+          setNotice({ tone: 'error', text: 'GenLayer accepted consensus on an execution error. No contract state changed; review the error before retrying.' })
+        }
+        return
+      }
       if (['UNDETERMINED', 'CANCELED', 'VALIDATORS_TIMEOUT', 'LEADER_TIMEOUT'].includes(normalizedStatus)) {
         if (!cancelled) {
           setPendingAction(null)
@@ -197,7 +207,7 @@ export default function ProofScoreV10() {
     setNotice({ tone: 'info', text: 'Confirm the transaction in your wallet. The app will continue as soon as it is submitted.' })
     try {
       const hash = await writeContract(address, method, args, value)
-      const nextPending = { method, hash, startedAt: Date.now(), campaignCount: campaigns.length }
+      const nextPending = { method, hash, startedAt: Date.now(), campaignCount: campaigns.length, contractAddress: PROOFSCORE_V10_CONTRACT_ADDRESS }
       setPendingAction(nextPending)
       window.localStorage.setItem(PENDING_ACTION_KEY, JSON.stringify(nextPending))
       setNotice({ tone: 'success', text: `Transaction submitted: ${hash}. Waiting for GenLayer consensus — this page will update automatically.` })

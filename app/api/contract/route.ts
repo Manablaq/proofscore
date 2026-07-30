@@ -64,7 +64,18 @@ export async function GET(req: NextRequest) {
       })
       const payload = await response.json()
       if (!response.ok || payload.error || !payload.result) throw new Error(payload.error?.message ?? 'Could not retrieve transaction status.')
-      return NextResponse.json({ ok: true, result: payload.result }, { headers: { 'Cache-Control': 'no-store' } })
+      let executionResult: number | null = null
+      if (payload.result.statusCode === 5 || payload.result.statusCode === 7) {
+        const receiptResponse = await fetch(BRADBURY_RPC, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'gen_getTransactionReceipt', params: [{ txId: args[0] }], id: 2 }),
+          cache: 'no-store',
+        })
+        const receiptPayload = await receiptResponse.json()
+        if (receiptResponse.ok && !receiptPayload.error) executionResult = receiptPayload.result?.txExecutionResult ?? null
+      }
+      return NextResponse.json({ ok: true, result: { ...payload.result, executionResult } }, { headers: { 'Cache-Control': 'no-store' } })
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message ?? 'Could not retrieve transaction status.' }, { status: 502 })
     }
