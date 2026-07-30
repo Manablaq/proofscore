@@ -14,10 +14,12 @@ Only a consensus-accepted verdict may schedule a reward transfer.
   expiry-bound challenge token at the submitted HTTPS proof URL. Validators
   independently fetch the URL and require the exact token before marking the
   record `CONTROL_VERIFIED`.
-- **Quality decision:** validators evaluate publicly accessible evidence against
-  fixed criteria: functionality (25), meaningful GenLayer integration (30),
-  real-world use (20), documentation/reproducibility (15), and originality/reuse
-  potential (10). An `ACCEPTED` result needs a total of at least 70.
+- **Quality decision:** validators independently evaluate one concise, public
+  evidence dossier against fixed criteria: functionality (25), meaningful
+  GenLayer integration (30), real-world use (20), documentation/reproducibility
+  (15), and originality/reuse potential (10). The dossier links the stored
+  repository and product references. An `ACCEPTED` result needs a total of at
+  least 70.
 
 ## Claims we do not make
 
@@ -29,12 +31,14 @@ Only a consensus-accepted verdict may schedule a reward transfer.
 
 ## Security model
 
-Evidence URLs are HTTPS-only and bounded. Rendered pages are untrusted data; the
-quality prompt explicitly ignores instructions inside the evidence. Each quality
-result must fit an exact JSON schema, fixed per-criterion ranges, a valid verdict,
-and an acceptance threshold. Validator-side evaluation must agree on verdict and
-stay within four points on every rubric criterion. Any malformed result, failed
-fetch, expired challenge, or lack of consensus prevents payout eligibility.
+Evidence URLs are HTTPS-only and bounded. The documentation URL is the concise
+quality dossier; repository and product URLs are preserved as reference links.
+Rendered dossier text is untrusted data, and the quality prompt explicitly
+ignores instructions inside it. Each quality result is normalized to fixed
+per-criterion ranges, a valid verdict, and an acceptance threshold. Validators
+independently assess the dossier and must agree on the verdict with a bounded
+total-score difference. Any malformed result, failed fetch, expired challenge,
+or lack of consensus prevents payout eligibility.
 
 ## Required live proof before Portal submission
 

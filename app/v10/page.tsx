@@ -326,11 +326,11 @@ export default function ProofScoreV10() {
         </section>
 
         <section className="v10-workspace" id="submit-evidence">
-          <div className="v10-workspace-copy"><span>02 / SUBMIT</span><h2>Submit evidence<br />with context.</h2><p>Every submission creates a wallet-bound record. Use permanent, public HTTPS links so validators can assess the work and a one-time control token can be published.</p><div className="v10-rule"><b>Required</b><span>Proof, repository, product, and documentation URLs.</span></div></div>
+          <div className="v10-workspace-copy"><span>02 / SUBMIT</span><h2>Submit evidence<br />with context.</h2><p>Every submission creates a wallet-bound record. Use permanent, public HTTPS links so validators can assess the work and a one-time control token can be published.</p><div className="v10-rule"><b>Required</b><span>Proof, repository, product, and a concise public evidence dossier.</span></div></div>
           <form className="v10-form" onSubmit={submitEvidence} ref={submitFormRef}>
             <label>Campaign<select value={selectedCampaignId} required onChange={(event) => changeCampaign(event.target.value)}><option value="">Choose a campaign</option>{campaigns.map((campaign) => <option value={campaign.campaign_id} key={campaign.campaign_id}>{campaign.title} · {campaign.status}</option>)}</select></label>
             <div className="v10-form-grid"><label>Public handle<input name="handle" required minLength={2} placeholder="your-handle" /></label><label>Proof URL<input name="proof_url" type="url" required placeholder="https://…" /></label><label>Repository URL<input name="repository_url" type="url" required placeholder="https://github.com/…" /></label><label>Product URL<input name="product_url" type="url" required placeholder="https://…" /></label></div>
-            <label>Documentation URL<input name="documentation_url" type="url" required placeholder="https://…" /></label>
+            <label>Evidence dossier URL <small>Public, concise documentation that explains the work and links the repository and product.</small><input name="documentation_url" type="url" required placeholder="https://…" /></label>
             <label>Evidence notes <small>Optional but useful to validators</small><textarea name="notes" maxLength={2000} placeholder="Explain what was delivered, where to review it, and any relevant constraints." /></label>
             <button className="v10-primary" disabled={!isConnected || !selectedCampaignId || Boolean(submittingMethod || pendingAction)}>{submittingMethod === 'submit_evidence' ? 'Submitting evidence…' : pendingAction?.method === 'submit_evidence' ? 'Awaiting accepted state…' : 'Create evidence record'}</button>
           </form>
