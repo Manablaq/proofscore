@@ -10,7 +10,33 @@ PROOFSCORE-V10|1|1|0x5bb49021001200fe8156a81c7fcf097e535e7181|1785495600
 
 The token above is a one-time, wallet-bound public-control challenge. It proves control of this submitted resource for the stated verification window; it is not a claim of legal identity or universal quality.
 
-## Legacy v9 documentation
+## Current submission: ProofScore v10
+
+ProofScore v10 is the current GenLayer project under review. It is a
+decentralized builder-bounty workflow where a sponsor funds a concrete outcome,
+a builder proves control of a submitted public resource with a one-time
+wallet-bound token, and GenLayer validators settle a transparent
+evidence-completeness verdict before the reward can be released.
+
+### Reviewer quick start
+
+- Live v10 app: <https://proofscoreapp.vercel.app>
+- Public v10 evidence dossier: <https://raw.githubusercontent.com/Manablaq/proofscore/main/docs/V10_EVIDENCE.md>
+- v10 intelligent contract: [`0x55ab6143226Bea8FB30437129a81af74637A9b48`](https://explorer-bradbury.genlayer.com/address/0x55ab6143226Bea8FB30437129a81af74637A9b48)
+- v10 deployment transaction: <https://explorer-bradbury.genlayer.com/tx/0x10e3c6b876efe793559a9fe8d98b378e6e2bc93894543dd702c20deba2714e52>
+- v10 contract source: [`contracts/proof_score_v10.py`](contracts/proof_score_v10.py)
+
+The current v10 demo has completed its public-control and evidence-verdict
+flow on Bradbury. Its scope is deliberately narrow: it verifies control of the
+submitted public resource and transparent evidence-completeness signals; it
+does not claim to prove legal identity, authorship outside that resource, or
+universal objective quality.
+
+## Archived v9 documentation
+
+The v9 materials below are retained only as historical documentation. They are
+not the current product or contract submitted for review; the legacy UI is
+isolated at `/v9`.
 
 ProofScore is a GenLayer-native, evidence-settled builder bounty protocol: **reputation that settles rewards**. A sponsor locks a GEN reward pool and sets a minimum score. Builders submit public evidence identifiers, the contract computes a canonical score, and only an accepted qualifying submission unlocks a reward claim. Counter-evidence challenges remain in the on-chain audit trail without persisting validator-variable prose.
 
