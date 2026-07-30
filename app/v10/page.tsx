@@ -44,6 +44,8 @@ type Submission = {
 
 type Notice = { tone: 'success' | 'error' | 'info'; text: string } | null
 type PendingAction = { method: string; hash: string; startedAt: number; campaignCount: number }
+type TransactionStatus = { status: string; statusCode: number }
+const PENDING_ACTION_KEY = 'proofscore-v10-pending-action'
 
 async function readContract(method: string, args: unknown[] = []) {
   const response = await fetch(
@@ -53,6 +55,10 @@ async function readContract(method: string, args: unknown[] = []) {
   const payload = await response.json()
   if (!payload.ok) throw new Error(payload.error ?? 'Could not read contract state.')
   return payload.result
+}
+
+async function readTransactionStatus(hash: string) {
+  return readContract('transaction_status', [hash]) as Promise<TransactionStatus>
 }
 
 async function writeContract(address: string, method: string, args: unknown[], value?: bigint) {
@@ -130,6 +136,21 @@ export default function ProofScoreV10() {
   }, [refresh])
 
   useEffect(() => {
+    let timer: number | undefined
+    try {
+      const saved = window.localStorage.getItem(PENDING_ACTION_KEY)
+      if (!saved) return
+      const pending = JSON.parse(saved) as PendingAction
+      if (pending?.method && pending?.hash && Number.isFinite(pending.startedAt)) {
+        timer = window.setTimeout(() => setPendingAction(pending), 0)
+      }
+    } catch {
+      window.localStorage.removeItem(PENDING_ACTION_KEY)
+    }
+    return () => { if (timer) window.clearTimeout(timer) }
+  }, [])
+
+  useEffect(() => {
     if (!pendingAction || !address) return
 
     let cancelled = false
@@ -144,10 +165,21 @@ export default function ProofScoreV10() {
       return false
     }
     const checkState = async () => {
+      const status = await readTransactionStatus(pendingAction.hash)
+      const normalizedStatus = status.status.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()
+      if (['UNDETERMINED', 'CANCELED', 'VALIDATORS_TIMEOUT', 'LEADER_TIMEOUT'].includes(normalizedStatus)) {
+        if (!cancelled) {
+          setPendingAction(null)
+          window.localStorage.removeItem(PENDING_ACTION_KEY)
+          setNotice({ tone: 'error', text: `GenLayer did not apply this transaction (${normalizedStatus.replaceAll('_', ' ').toLowerCase()}). Your contract record is unchanged; retry the action once the network is available.` })
+        }
+        return
+      }
       const result = await refresh()
       if (!cancelled && result && hasSettled(result.campaigns, result.submissions)) {
         if (pendingAction.method === 'submit_evidence') submitFormRef.current?.reset()
         setPendingAction(null)
+        window.localStorage.removeItem(PENDING_ACTION_KEY)
         setNotice({ tone: 'success', text: 'Accepted state detected. The workspace has been updated automatically.' })
       }
     }
@@ -165,7 +197,9 @@ export default function ProofScoreV10() {
     setNotice({ tone: 'info', text: 'Confirm the transaction in your wallet. The app will continue as soon as it is submitted.' })
     try {
       const hash = await writeContract(address, method, args, value)
-      setPendingAction({ method, hash, startedAt: Date.now(), campaignCount: campaigns.length })
+      const nextPending = { method, hash, startedAt: Date.now(), campaignCount: campaigns.length }
+      setPendingAction(nextPending)
+      window.localStorage.setItem(PENDING_ACTION_KEY, JSON.stringify(nextPending))
       setNotice({ tone: 'success', text: `Transaction submitted: ${hash}. Waiting for GenLayer consensus — this page will update automatically.` })
     } catch (error) {
       setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'Transaction could not be submitted.' })

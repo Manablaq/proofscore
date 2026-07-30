@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { BRADBURY_RPC, PROOFSCORE_CONTRACT_ADDRESS, PROOFSCORE_IS_CONFIGURED, PROOFSCORE_V10_CONTRACT_ADDRESS, PROOFSCORE_V10_IS_CONFIGURED } from '@/lib/config'
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/
+const TRANSACTION_HASH_RE = /^0x[a-fA-F0-9]{64}$/
 const READ_TRANSACTION_HASH_VARIANT = 'latest-nonfinal'
 
 const READ_METHODS = {
@@ -48,6 +49,26 @@ export async function GET(req: NextRequest) {
   if (!configured) return NextResponse.json({ ok: false, error: `ProofScore ${version} contract address is not configured.` }, { status: 503 })
   const method = req.nextUrl.searchParams.get('method') ?? ''
   const argsParam = req.nextUrl.searchParams.get('args')
+
+  if (method === 'transaction_status') {
+    const args = parseArgs(argsParam)
+    if (!Array.isArray(args) || args.length !== 1 || typeof args[0] !== 'string' || !TRANSACTION_HASH_RE.test(args[0])) {
+      return NextResponse.json({ ok: false, error: 'transaction_status expects one transaction hash.' }, { status: 400 })
+    }
+    try {
+      const response = await fetch(BRADBURY_RPC, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'gen_getTransactionStatus', params: [{ txId: args[0] }], id: 1 }),
+        cache: 'no-store',
+      })
+      const payload = await response.json()
+      if (!response.ok || payload.error || !payload.result) throw new Error(payload.error?.message ?? 'Could not retrieve transaction status.')
+      return NextResponse.json({ ok: true, result: payload.result }, { headers: { 'Cache-Control': 'no-store' } })
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message ?? 'Could not retrieve transaction status.' }, { status: 502 })
+    }
+  }
 
   if (!(method in methods)) {
     return NextResponse.json({ ok: false, error: 'Unsupported contract read method.' }, { status: 400 })
