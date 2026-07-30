@@ -1,7 +1,7 @@
 'use client'
 
 import './v10.css'
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { useAccount } from 'wagmi'
@@ -42,6 +42,7 @@ type Submission = {
 }
 
 type Notice = { tone: 'success' | 'error' | 'info'; text: string } | null
+type PendingAction = { method: string; hash: string; startedAt: number; campaignCount: number }
 
 async function readContract(method: string, args: unknown[] = []) {
   const response = await fetch(
@@ -91,6 +92,9 @@ export default function ProofScoreV10() {
   const [submissions, setSubmissions] = useState<Submission[]>([])
   const [loading, setLoading] = useState(true)
   const [notice, setNotice] = useState<Notice>(null)
+  const [submittingMethod, setSubmittingMethod] = useState<string | null>(null)
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null)
+  const submitFormRef = useRef<HTMLFormElement>(null)
 
   const selectedCampaign = campaigns.find((campaign) => campaign.campaign_id === selectedCampaignId)
   const ownSubmission = useMemo(
@@ -106,8 +110,9 @@ export default function ProofScoreV10() {
       const id = requestedCampaignId ?? selectedCampaignId ?? nextCampaigns[0]?.campaign_id ?? ''
       setCampaigns(nextCampaigns)
       setSelectedCampaignId(id)
-      setSubmissions(id ? await readContract('list_submissions', [id]) as Submission[] : [])
-      setNotice(null)
+      const nextSubmissions = id ? await readContract('list_submissions', [id]) as Submission[] : []
+      setSubmissions(nextSubmissions)
+      return { campaigns: nextCampaigns, submissions: nextSubmissions }
     } catch (error) {
       setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'Could not refresh contract state.' })
     } finally {
@@ -120,16 +125,48 @@ export default function ProofScoreV10() {
     return () => window.clearTimeout(timer)
   }, [refresh])
 
+  useEffect(() => {
+    if (!pendingAction || !address) return
+
+    let cancelled = false
+    const hasSettled = (nextCampaigns: Campaign[], nextSubmissions: Submission[]) => {
+      if (pendingAction.method === 'create_campaign') return nextCampaigns.length > pendingAction.campaignCount
+      const mine = nextSubmissions.find((submission) => submission.builder.toLowerCase() === address.toLowerCase())
+      if (pendingAction.method === 'submit_evidence') return Boolean(mine)
+      if (!mine) return false
+      if (pendingAction.method === 'verify_account_control') return mine.account_control !== 'PENDING'
+      if (pendingAction.method === 'adjudicate_quality') return mine.quality_status !== 'NOT_REQUESTED'
+      if (pendingAction.method === 'claim_reward') return mine.claimed
+      return false
+    }
+    const checkState = async () => {
+      const result = await refresh()
+      if (!cancelled && result && hasSettled(result.campaigns, result.submissions)) {
+        if (pendingAction.method === 'submit_evidence') submitFormRef.current?.reset()
+        setPendingAction(null)
+        setNotice({ tone: 'success', text: 'Accepted state detected. The workspace has been updated automatically.' })
+      }
+    }
+    const initial = window.setTimeout(() => { void checkState() }, 3_000)
+    const interval = window.setInterval(() => { void checkState() }, 12_000)
+    return () => { cancelled = true; window.clearTimeout(initial); window.clearInterval(interval) }
+  }, [address, pendingAction, refresh])
+
   async function run(method: string, args: unknown[], value?: bigint) {
     if (!address) {
       setNotice({ tone: 'info', text: 'Connect your wallet to submit a transaction.' })
       return
     }
+    setSubmittingMethod(method)
+    setNotice({ tone: 'info', text: 'Confirm the transaction in your wallet. The app will continue as soon as it is submitted.' })
     try {
       const hash = await writeContract(address, method, args, value)
-      setNotice({ tone: 'success', text: `Transaction submitted: ${hash}. It must reach accepted state before the next action.` })
+      setPendingAction({ method, hash, startedAt: Date.now(), campaignCount: campaigns.length })
+      setNotice({ tone: 'success', text: `Transaction submitted: ${hash}. Waiting for GenLayer consensus — this page will update automatically.` })
     } catch (error) {
       setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'Transaction could not be submitted.' })
+    } finally {
+      setSubmittingMethod(null)
     }
   }
 
@@ -204,6 +241,7 @@ export default function ProofScoreV10() {
         </header>
 
         {notice && <div className={`v10-notice ${notice.tone}`} role="status">{notice.text}</div>}
+        {(submittingMethod || pendingAction) && <div className="v10-transaction-status" aria-live="polite"><span className="transaction-spinner" /> <div><b>{submittingMethod ? 'Awaiting wallet confirmation' : 'Waiting for GenLayer consensus'}</b><small>{submittingMethod ? 'Please approve the request in your wallet.' : `Submitted ${shortAddress(pendingAction!.hash)} · checking accepted state automatically`}</small></div></div>}
 
         <section className="v10-hero" id="overview">
           <div>
@@ -241,12 +279,12 @@ export default function ProofScoreV10() {
 
         <section className="v10-workspace" id="submit-evidence">
           <div className="v10-workspace-copy"><span>02 / SUBMIT</span><h2>Submit evidence<br />with context.</h2><p>Every submission creates a wallet-bound record. Use permanent, public HTTPS links so validators can assess the work and a one-time control token can be published.</p><div className="v10-rule"><b>Required</b><span>Proof, repository, product, and documentation URLs.</span></div></div>
-          <form className="v10-form" onSubmit={submitEvidence}>
+          <form className="v10-form" onSubmit={submitEvidence} ref={submitFormRef}>
             <label>Campaign<select value={selectedCampaignId} required onChange={(event) => changeCampaign(event.target.value)}><option value="">Choose a campaign</option>{campaigns.map((campaign) => <option value={campaign.campaign_id} key={campaign.campaign_id}>{campaign.title} · {campaign.status}</option>)}</select></label>
             <div className="v10-form-grid"><label>Public handle<input name="handle" required minLength={2} placeholder="your-handle" /></label><label>Proof URL<input name="proof_url" type="url" required placeholder="https://…" /></label><label>Repository URL<input name="repository_url" type="url" required placeholder="https://github.com/…" /></label><label>Product URL<input name="product_url" type="url" required placeholder="https://…" /></label></div>
             <label>Documentation URL<input name="documentation_url" type="url" required placeholder="https://…" /></label>
             <label>Evidence notes <small>Optional but useful to validators</small><textarea name="notes" maxLength={2000} placeholder="Explain what was delivered, where to review it, and any relevant constraints." /></label>
-            <button className="v10-primary" disabled={!isConnected || !selectedCampaignId}>Create evidence record</button>
+            <button className="v10-primary" disabled={!isConnected || !selectedCampaignId || Boolean(submittingMethod || pendingAction)}>{submittingMethod === 'submit_evidence' ? 'Submitting evidence…' : pendingAction?.method === 'submit_evidence' ? 'Awaiting accepted state…' : 'Create evidence record'}</button>
           </form>
         </section>
 
@@ -255,9 +293,9 @@ export default function ProofScoreV10() {
           {!address ? <div className="v10-empty"><strong>Connect the submitting wallet</strong><p>Your active evidence record and available actions will appear here.</p></div> : !ownSubmission ? <div className="v10-empty"><strong>No record for this wallet</strong><p>Submit evidence to the selected campaign to start a verification flow.</p></div> : <div className="v10-verification-card">
             <div className="verification-state"><span className="v10-status pending">{displayStatus(ownSubmission.account_control)}</span><h3>Public-control challenge</h3><p>Publish this exact token at your submitted Proof URL, then request verification before it expires.</p><code>{ownSubmission.verification_token}</code><small>Expires {new Date(ownSubmission.verification_expires_at * 1000).toLocaleString()}</small></div>
             <div className="verification-actions"><div className="action-progress"><span className={ownSubmission.account_control === 'CONTROL_VERIFIED' ? 'done' : ''}>1</span><p><b>Control</b><small>{displayStatus(ownSubmission.account_control)}</small></p><i /><span className={ownSubmission.quality_status !== 'NOT_REQUESTED' ? 'done' : ''}>2</span><p><b>Quality</b><small>{displayStatus(ownSubmission.quality_status)}</small></p></div>
-              <button className="v10-secondary" disabled={!isConnected || ownSubmission.account_control !== 'PENDING'} onClick={() => void run('verify_account_control', [selectedCampaignId, ownSubmission.submission_id])}>Verify public control</button>
-              <button className="v10-secondary" disabled={!isConnected || ownSubmission.account_control !== 'CONTROL_VERIFIED' || ownSubmission.quality_status !== 'NOT_REQUESTED'} onClick={() => void run('adjudicate_quality', [selectedCampaignId, ownSubmission.submission_id])}>Request validator verdict</button>
-              {ownSubmission.eligible_to_claim && !ownSubmission.claimed && <button className="v10-primary" onClick={() => void run('claim_reward', [selectedCampaignId, ownSubmission.submission_id])}>Claim verified reward</button>}
+              <button className="v10-secondary" disabled={!isConnected || ownSubmission.account_control !== 'PENDING' || Boolean(submittingMethod || pendingAction)} onClick={() => void run('verify_account_control', [selectedCampaignId, ownSubmission.submission_id])}>{submittingMethod === 'verify_account_control' ? 'Submitting verification…' : pendingAction?.method === 'verify_account_control' ? 'Verifying automatically…' : 'Verify public control'}</button>
+              <button className="v10-secondary" disabled={!isConnected || ownSubmission.account_control !== 'CONTROL_VERIFIED' || ownSubmission.quality_status !== 'NOT_REQUESTED' || Boolean(submittingMethod || pendingAction)} onClick={() => void run('adjudicate_quality', [selectedCampaignId, ownSubmission.submission_id])}>{submittingMethod === 'adjudicate_quality' ? 'Submitting verdict request…' : pendingAction?.method === 'adjudicate_quality' ? 'Checking consensus…' : 'Request validator verdict'}</button>
+              {ownSubmission.eligible_to_claim && !ownSubmission.claimed && <button className="v10-primary" disabled={Boolean(submittingMethod || pendingAction)} onClick={() => void run('claim_reward', [selectedCampaignId, ownSubmission.submission_id])}>{submittingMethod === 'claim_reward' ? 'Submitting claim…' : pendingAction?.method === 'claim_reward' ? 'Awaiting accepted state…' : 'Claim verified reward'}</button>}
               <div className="v10-verdict"><span>VERDICT</span><strong>{ownSubmission.verdict || 'Pending'}</strong><b>{ownSubmission.score || 0}/100</b><p>{ownSubmission.rationale || 'A validator rationale will appear after quality adjudication.'}</p></div>
             </div>
           </div>}
@@ -270,7 +308,7 @@ export default function ProofScoreV10() {
             <label>Concrete contribution brief<textarea name="description" required minLength={20} maxLength={2000} placeholder="Describe the deliverable, acceptance criteria, and evidence reviewers should examine." /></label>
             <div className="v10-form-grid"><label>GEN per accepted builder<input name="reward" type="number" required min="0.000001" step="0.000001" placeholder="1" /></label><label>Accepted builder slots<input name="slots" type="number" required min="1" step="1" defaultValue="1" /></label></div>
             <label>Deadline<input name="deadline" type="datetime-local" required /></label>
-            <button className="v10-primary" disabled={!isConnected}>Create and fund campaign</button>
+            <button className="v10-primary" disabled={!isConnected || Boolean(submittingMethod || pendingAction)}>{submittingMethod === 'create_campaign' ? 'Submitting campaign…' : pendingAction?.method === 'create_campaign' ? 'Awaiting accepted state…' : 'Create and fund campaign'}</button>
           </form>
         </section>
 
