@@ -6,6 +6,9 @@ the claim controls a stated public resource, then submits repository, product,
 and documentation evidence for decentralized evaluation against a fixed rubric.
 Only a consensus-accepted verdict may schedule a reward transfer.
 
+Use the concise [public v10 evidence dossier](V10_EVIDENCE.md) as the
+documentation URL for live quality-adjudication tests.
+
 ## Exact guarantees
 
 - **Wallet control:** the caller's signed GenLayer transaction identifies the
