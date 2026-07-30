@@ -25,7 +25,9 @@ class _Recipient:
 
 
 def _fail(message: str) -> None:
-    raise gl.UserError(message)
+    # Bradbury exposes application errors through gl.vm, not gl directly.
+    # Using gl.UserError turns an ordinary failed requirement into a VM crash.
+    raise gl.vm.UserError(message)
 
 
 def _require(condition: bool, message: str) -> None:
@@ -86,8 +88,10 @@ def _proof_token(campaign_id: str, submission_id: str, wallet: str, expiry: int)
 def _fetch_contains(url: str, token: str) -> bool:
     """Validators independently fetch only a boolean; no fetched prose reaches storage."""
     def fetch_token():
-        page = gl.nondet.web.render(url, mode="html")
-        return token in str(page)
+        # Fetch the response body directly. Rendered page wrapper representations
+        # are not a stable source of the original public text (notably on GitHub).
+        response = gl.nondet.web.get(url)
+        return token in response.body.decode("utf-8")
     return gl.eq_principle.strict_eq(fetch_token)
 
 
