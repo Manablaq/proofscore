@@ -13,8 +13,8 @@ after an `ACCEPTED` verdict meets the published 70/100 threshold.
 
 - Live workspace: <https://proofscoreapp.vercel.app>
 - Source repository: <https://github.com/Manablaq/proofscore>
-- v10 contract: `0x8F34645E4757EFa01BDb620431934ca1caEAe4d4`
-- Deployment transaction: <https://explorer-bradbury.genlayer.com/tx/0x1560d78338c702e9cf62ddbe2c6bac7f873c836d00ac1b2ca18fcbf5a5c032d5>
+- v10 contract: `0x55ab6143226Bea8FB30437129a81af74637A9b48`
+- Deployment transaction: <https://explorer-bradbury.genlayer.com/tx/0x10e3c6b876efe793559a9fe8d98b378e6e2bc93894543dd702c20deba2714e52>
 - Contract source: [proof_score_v10.py](../contracts/proof_score_v10.py)
 
 ## Reproducible workflow
